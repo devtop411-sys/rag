@@ -143,43 +143,38 @@ function buildSparseVector(text) {
 }
 
 // ---------------------------------------------------------------------------
-// Qdrant collection — hybrid: named dense (Voyage AI 1024) + sparse (TF)
-// Auto-migrates collections that have wrong size or missing sparse vector.
+// Qdrant collection — single unnamed default vector (Voyage AI 1024 dims)
+// Using unnamed vector so Dify's built-in Qdrant node can query it directly.
+// Auto-migrates collections with wrong size or named-vector schema.
 // ---------------------------------------------------------------------------
 async function ensureCollection(denseSize) {
   const { collections } = await qdrant.getCollections();
   const exists = collections.some((c) => c.name === COLLECTION);
 
   if (exists) {
-    const info            = await qdrant.getCollection(COLLECTION);
-    const currentSize     = info.config?.params?.vectors?.dense?.size;
-    const hasDenseNamed   = !!info.config?.params?.vectors?.dense;
-    const hasSparseVector = !!info.config?.params?.sparse_vectors?.sparse;
+    const info        = await qdrant.getCollection(COLLECTION);
+    const params      = info.config?.params?.vectors;
+    // Unnamed default vector is stored directly as { size, distance } object
+    const isUnnamed   = params && typeof params.size === "number";
+    const currentSize = isUnnamed ? params.size : null;
 
-    if (hasDenseNamed && currentSize === denseSize && hasSparseVector) {
+    if (isUnnamed && currentSize === denseSize) {
       return; // Already correct — nothing to do
     }
 
-    const reason = !hasDenseNamed
-      ? "legacy single-vector schema (no named vectors)"
-      : !hasSparseVector
-        ? "missing sparse vector"
-        : `dense size mismatch (${currentSize} → ${denseSize})`;
+    const reason = !isUnnamed
+      ? "named-vector schema (incompatible with Dify Qdrant node)"
+      : `vector size mismatch (${currentSize} → ${denseSize})`;
 
     console.log(`[ensureCollection] Recreating "${COLLECTION}": ${reason}`);
     await qdrant.deleteCollection(COLLECTION);
   }
 
   await qdrant.createCollection(COLLECTION, {
-    vectors: {
-      dense: { size: denseSize, distance: "Cosine" },
-    },
-    sparse_vectors: {
-      sparse: { index: { on_disk: false } },
-    },
+    vectors: { size: denseSize, distance: "Cosine" },
   });
 
-  console.log(`[ensureCollection] Created "${COLLECTION}" (dense=${denseSize}, distance=Cosine, sparse=TF)`);
+  console.log(`[ensureCollection] Created "${COLLECTION}" (unnamed default vector, size=${denseSize}, Cosine)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +196,7 @@ async function safeUnlink(filePath) {
 }
 
 // ---------------------------------------------------------------------------
-// POST /ingest — parse, chunk, embed (Voyage AI), upsert dense + sparse vectors
+// POST /ingest — parse, chunk, embed (Voyage AI), upsert unnamed default vectors
 // ---------------------------------------------------------------------------
 app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
   const tempPath = req.file?.path;
@@ -263,11 +258,8 @@ app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
     const documentId = uuidv4();
 
     const points = chunks.map((text, index) => ({
-      id:      uuidv4(),
-      vectors: {
-        dense:  denseEmbeddings[index],          // 1024-dim Voyage AI vector
-        sparse: buildSparseVector(text),          // TF sparse vector for keyword search
-      },
+      id:     uuidv4(),
+      vector: denseEmbeddings[index],            // unnamed default vector, 1024-dim Voyage AI
       payload: {
         document_id:       documentId,
         source,
@@ -303,7 +295,9 @@ app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /retrieve — embed query via Voyage AI, return vector for Dify Qdrant node
+// POST /retrieve — call Voyage AI, return embedding for Dify Qdrant node
+// Dify workflow: HTTP REQUEST (/retrieve) → QDRANT VECTOR SEARCH → LLM → ANSWER
+// The Qdrant node uses body.embedding as the query vector against the collection.
 // Body:  { query: string }
 // Reply: { embedding: number[], model: string, vector_size: number }
 // ---------------------------------------------------------------------------
@@ -323,12 +317,6 @@ app.post("/retrieve", requireApiKey, async (req, res) => {
       });
     }
 
-    if (embedding.length !== EXPECTED_DENSE_SIZE) {
-      return res.status(500).json({
-        error: `Vector dimension mismatch: expected ${EXPECTED_DENSE_SIZE}, got ${embedding.length}`,
-      });
-    }
-
     console.log(`[retrieve] Embedded query (${embedding.length} dims) via ${EMBEDDING_MODEL}`);
 
     res.json({
@@ -338,73 +326,6 @@ app.post("/retrieve", requireApiKey, async (req, res) => {
     });
   } catch (error) {
     console.error("[retrieve] error:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// POST /search — full hybrid search (Voyage AI dense + TF sparse, RRF fusion)
-// Use this when you want the server to query Qdrant directly.
-// Body:  { query: string, topK?: number, source?: string }
-// ---------------------------------------------------------------------------
-app.post("/search", requireApiKey, async (req, res) => {
-  try {
-    const { query, topK = 10, source } = req.body;
-
-    if (!query) {
-      return res.status(400).json({ error: "Missing query" });
-    }
-
-    const [denseVector] = await embedTexts([query]);
-    const sparseVector  = buildSparseVector(query);
-
-    if (!denseVector || denseVector.length === 0) {
-      return res.status(500).json({
-        error: "Voyage AI returned an empty vector — verify VOYAGE_API_KEY",
-      });
-    }
-
-    if (denseVector.length !== EXPECTED_DENSE_SIZE) {
-      return res.status(500).json({
-        error: `Vector dimension mismatch: expected ${EXPECTED_DENSE_SIZE}, got ${denseVector.length}. Re-index all documents with ${EMBEDDING_MODEL}.`,
-      });
-    }
-
-    const filter = source
-      ? { must: [{ key: "source", match: { value: source } }] }
-      : undefined;
-
-    const prefetchLimit = Math.max(20, topK * 4);
-
-    const results = await qdrant.query(COLLECTION, {
-      prefetch: [
-        { query: denseVector, using: "dense",  limit: prefetchLimit, filter },
-        { query: sparseVector, using: "sparse", limit: prefetchLimit, filter },
-      ],
-      query:        { fusion: "rrf" },
-      limit:        topK,
-      with_payload: true,
-      filter,
-    });
-
-    const context = buildContext(results);
-
-    res.json({
-      query,
-      topK,
-      embedding_model: EMBEDDING_MODEL,
-      vector_size:     EXPECTED_DENSE_SIZE,
-      search_type:     "hybrid (dense Voyage AI + sparse TF, RRF)",
-      matches: results.map((r) => ({
-        score:       r.score,
-        source:      r.payload.source,
-        chunk_index: r.payload.chunk_index,
-        text:        r.payload.text,
-      })),
-      context,
-    });
-  } catch (error) {
-    console.error("[search] error:", error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -8,7 +8,6 @@ import dotenv from "dotenv";
 import { v4 as uuidv4 } from "uuid";
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
-import OpenAI from "openai";
 
 dotenv.config();
 
@@ -20,8 +19,8 @@ app.use(express.json({ limit: "10mb" }));
 // Embedding model config — single source of truth
 // Both ingest and query MUST use the same model and size.
 // ---------------------------------------------------------------------------
-const EMBEDDING_MODEL     = "text-embedding-3-small";
-const EXPECTED_DENSE_SIZE = 1536;
+const EMBEDDING_MODEL     = "voyage-finance-2";
+const EXPECTED_DENSE_SIZE = 1024;
 
 // ---------------------------------------------------------------------------
 // Multer — 20 MB file size limit
@@ -49,8 +48,6 @@ const qdrant = new QdrantClient({
   apiKey: process.env.QDRANT_API_KEY || undefined,
 });
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
 // ---------------------------------------------------------------------------
 // API key middleware
 // ---------------------------------------------------------------------------
@@ -65,21 +62,32 @@ function requireApiKey(req, res, next) {
 }
 
 // ---------------------------------------------------------------------------
-// Embeddings — OpenAI text-embedding-3-small (1536 dims)
+// Embeddings — Voyage AI voyage-finance-2 (1024 dims)
 // Used for BOTH document ingestion and query search — never mix models.
 // ---------------------------------------------------------------------------
 async function embedTexts(texts) {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is not configured in .env");
+  if (!process.env.VOYAGE_API_KEY) {
+    throw new Error("VOYAGE_API_KEY is not configured in .env");
   }
 
-  const response = await openai.embeddings.create({
-    model: EMBEDDING_MODEL,
-    input: texts,
+  const response = await fetch("https://api.voyageai.com/v1/embeddings", {
+    method:  "POST",
+    headers: {
+      "Content-Type":  "application/json",
+      "Authorization": `Bearer ${process.env.VOYAGE_API_KEY}`,
+    },
+    body: JSON.stringify({ model: EMBEDDING_MODEL, input: texts }),
   });
 
-  // OpenAI batch responses are ordered by `index`, sort to be safe
-  return response.data
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Voyage AI embeddings error (${response.status}): ${errText}`);
+  }
+
+  const data = await response.json();
+
+  // Voyage AI batch responses are ordered by `index`, sort to be safe
+  return data.data
     .sort((a, b) => a.index - b.index)
     .map((item) => item.embedding);
 }
@@ -135,7 +143,7 @@ function buildSparseVector(text) {
 }
 
 // ---------------------------------------------------------------------------
-// Qdrant collection — hybrid: named dense (OpenAI 1536) + sparse (TF)
+// Qdrant collection — hybrid: named dense (Voyage AI 1024) + sparse (TF)
 // Auto-migrates collections that have wrong size or missing sparse vector.
 // ---------------------------------------------------------------------------
 async function ensureCollection(denseSize) {
@@ -193,7 +201,7 @@ async function safeUnlink(filePath) {
 }
 
 // ---------------------------------------------------------------------------
-// POST /ingest — parse, chunk, embed (OpenAI), upsert dense + sparse vectors
+// POST /ingest — parse, chunk, embed (Voyage AI), upsert dense + sparse vectors
 // ---------------------------------------------------------------------------
 app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
   const tempPath = req.file?.path;
@@ -239,7 +247,7 @@ app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
 
     console.log(`[ingest] "${source}" (${fileType}, ${fileSize} bytes) → ${chunks.length} chunks`);
 
-    // Dense embeddings via OpenAI text-embedding-3-small → 1536 dims
+    // Dense embeddings via Voyage AI voyage-finance-2 → 1024 dims
     const denseEmbeddings = await embedTexts(chunks);
 
     // Validate returned vector size matches expected
@@ -257,7 +265,7 @@ app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
     const points = chunks.map((text, index) => ({
       id:      uuidv4(),
       vectors: {
-        dense:  denseEmbeddings[index],          // 1536-dim OpenAI vector
+        dense:  denseEmbeddings[index],          // 1024-dim Voyage AI vector
         sparse: buildSparseVector(text),          // TF sparse vector for keyword search
       },
       payload: {
@@ -277,7 +285,7 @@ app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
     await qdrant.upsert(COLLECTION, { wait: true, points });
     await safeUnlink(tempPath);
 
-    console.log(`[ingest] Upserted ${points.length} points (${EXPECTED_DENSE_SIZE}-dim) into "${COLLECTION}"`);
+    console.log(`[ingest] Upserted ${points.length} points (${EXPECTED_DENSE_SIZE}-dim Voyage AI) into "${COLLECTION}"`);
 
     res.json({
       ok:           true,
@@ -295,9 +303,51 @@ app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /retrieve — hybrid search (OpenAI dense + TF sparse) fused via RRF
+// POST /retrieve — embed query via Voyage AI, return vector for Dify Qdrant node
+// Body:  { query: string }
+// Reply: { embedding: number[], model: string, vector_size: number }
 // ---------------------------------------------------------------------------
 app.post("/retrieve", requireApiKey, async (req, res) => {
+  try {
+    const { query } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: "Missing query" });
+    }
+
+    const [embedding] = await embedTexts([query]);
+
+    if (!embedding || embedding.length === 0) {
+      return res.status(500).json({
+        error: "Voyage AI returned an empty vector — verify VOYAGE_API_KEY",
+      });
+    }
+
+    if (embedding.length !== EXPECTED_DENSE_SIZE) {
+      return res.status(500).json({
+        error: `Vector dimension mismatch: expected ${EXPECTED_DENSE_SIZE}, got ${embedding.length}`,
+      });
+    }
+
+    console.log(`[retrieve] Embedded query (${embedding.length} dims) via ${EMBEDDING_MODEL}`);
+
+    res.json({
+      embedding,
+      model:       EMBEDDING_MODEL,
+      vector_size: EXPECTED_DENSE_SIZE,
+    });
+  } catch (error) {
+    console.error("[retrieve] error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /search — full hybrid search (Voyage AI dense + TF sparse, RRF fusion)
+// Use this when you want the server to query Qdrant directly.
+// Body:  { query: string, topK?: number, source?: string }
+// ---------------------------------------------------------------------------
+app.post("/search", requireApiKey, async (req, res) => {
   try {
     const { query, topK = 10, source } = req.body;
 
@@ -305,14 +355,12 @@ app.post("/retrieve", requireApiKey, async (req, res) => {
       return res.status(400).json({ error: "Missing query" });
     }
 
-    // Embed query with the SAME model used during ingest
     const [denseVector] = await embedTexts([query]);
     const sparseVector  = buildSparseVector(query);
 
-    // --- Validation ---
     if (!denseVector || denseVector.length === 0) {
       return res.status(500).json({
-        error: "Embedding returned an empty vector — verify OPENAI_API_KEY",
+        error: "Voyage AI returned an empty vector — verify VOYAGE_API_KEY",
       });
     }
 
@@ -346,7 +394,7 @@ app.post("/retrieve", requireApiKey, async (req, res) => {
       topK,
       embedding_model: EMBEDDING_MODEL,
       vector_size:     EXPECTED_DENSE_SIZE,
-      search_type:     "hybrid (dense OpenAI + sparse TF, RRF)",
+      search_type:     "hybrid (dense Voyage AI + sparse TF, RRF)",
       matches: results.map((r) => ({
         score:       r.score,
         source:      r.payload.source,
@@ -356,7 +404,7 @@ app.post("/retrieve", requireApiKey, async (req, res) => {
       context,
     });
   } catch (error) {
-    console.error("[retrieve] error:", error);
+    console.error("[search] error:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -418,7 +466,7 @@ app.get("/documents", requireApiKey, async (req, res) => {
 // ---------------------------------------------------------------------------
 app.listen(process.env.PORT || 3001, () => {
   console.log(`RAG service running on port ${process.env.PORT || 3001}`);
-  console.log(`Embedding model : ${EMBEDDING_MODEL} (${EXPECTED_DENSE_SIZE} dims)`);
+  console.log(`Embedding model : ${EMBEDDING_MODEL} (${EXPECTED_DENSE_SIZE} dims, Voyage AI)`);
   console.log(`Qdrant URL      : ${process.env.QDRANT_URL}`);
   console.log(`Collection      : ${COLLECTION}`);
 });

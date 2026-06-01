@@ -14,30 +14,36 @@ jobs:
       - name: Deploy on EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host:     ${{ secrets.EC2_HOST }}
+          host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
-          key:      ${{ secrets.EC2_SSH_KEY }}
+          key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
 
-            # ── Clone repo on first run, pull on subsequent runs ───────────────
-            if [ ! -d ~/rag-demo/.git ]; then
-              git clone https://github.com/${{ github.repository }}.git ~/rag-demo
+            # Clone repo on first run
+            if [ ! -d "$HOME/rag-demo/.git" ]; then
+              git clone https://github.com/${{ github.repository }}.git "$HOME/rag-demo"
             fi
 
-            cd ~/rag-demo
-            git pull origin master
+            cd "$HOME/rag-demo"
 
-            # ── Write .env with secrets ────────────────────────────────────────
+            # Pull latest master branch
+            git fetch origin master
+            git reset --hard origin/master
+
+            # Write environment variables
             cat > .env <<EOF
-VOYAGE_API_KEY=${{ secrets.VOYAGE_API_KEY }}
-VOYAGE_MODEL=${{ vars.VOYAGE_MODEL || 'voyage-3.5' }}
-QDRANT_URL=${{ secrets.QDRANT_URL }}
-QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }}
-QDRANT_COLLECTION=investment_memos
-API_KEY=${{ secrets.API_KEY }}
-EOF
-
-            # ── Build and start containers ─────────────────────────────────────
-            docker compose up -d --build --remove-orphans
-            docker image prune -f
+  VOYAGE_API_KEY=${{ secrets.VOYAGE_API_KEY }}
+  VOYAGE_MODEL=voyage-3.5
+  QDRANT_URL=${{ secrets.QDRANT_URL }}
+  QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }}
+  QDRANT_COLLECTION=investment_memos
+  API_KEY=${{ secrets.API_KEY }}
+  EOF
+  
+  # Build and restart containers
+  docker compose down || true
+  docker compose up -d --build --remove-orphans
+  
+  # Clean unused Docker images
+  docker image prune -f

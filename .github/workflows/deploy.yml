@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: eu-east-1
+  AWS_REGION: eu-west-1
   # Single ECR repository — backend and frontend use tag prefixes
   ECR_REPO: rag
 

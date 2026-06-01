@@ -2,7 +2,7 @@ name: Build & Deploy to AWS
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 env:
@@ -24,24 +24,22 @@ jobs:
       - name: Validate required config
         run: |
           missing=()
-          [ -z "${{ vars.AWS_REGION }}" ]              && missing+=("AWS_REGION (Variable)")
-          [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]    && missing+=("AWS_ACCESS_KEY_ID (Secret)")
+          [ -z "${{ env.AWS_REGION }}" ] && missing+=("AWS_REGION")
+          [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && missing+=("AWS_ACCESS_KEY_ID (Secret)")
           [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] && missing+=("AWS_SECRET_ACCESS_KEY (Secret)")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "❌ Missing GitHub configuration:"
             for item in "${missing[@]}"; do echo "   - $item"; done
-            echo ""
-            echo "Go to: Settings → Secrets and variables → Actions"
             exit 1
           fi
-          echo "✅ All required config present. Region: ${{ vars.AWS_REGION }}"
+          echo "✅ Region: ${{ env.AWS_REGION }}"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ vars.AWS_REGION }}
+          aws-region: eu-west-1
 
       - name: Login to Amazon ECR
         id: ecr-login
@@ -91,7 +89,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ vars.AWS_REGION }}
+          aws-region: eu-west-1
 
       - name: Login to Amazon ECR
         id: ecr-login

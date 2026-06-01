@@ -27,16 +27,16 @@ jobs:
           script: |
             set -e
 
-            # Clone repository on first deploy
-            if [ ! -d "$HOME/rag-demo/.git" ]; then
+            # Clone or update repository
+            if [ -d "$HOME/rag-demo/.git" ]; then
+              cd "$HOME/rag-demo"
+              git fetch origin master
+              git reset --hard origin/master
+            else
+              rm -rf "$HOME/rag-demo"
               git clone https://github.com/${{ github.repository }}.git "$HOME/rag-demo"
+              cd "$HOME/rag-demo"
             fi
-
-            cd "$HOME/rag-demo"
-
-            # Update repository
-            git fetch origin master
-            git reset --hard origin/master
 
             # Create .env file
             echo "VOYAGE_API_KEY=$VOYAGE_API_KEY" > .env

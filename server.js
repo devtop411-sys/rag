@@ -19,8 +19,20 @@ app.use(express.json({ limit: "10mb" }));
 // Embedding model config — single source of truth
 // Both ingest and query MUST use the same model and size.
 // ---------------------------------------------------------------------------
-const EMBEDDING_MODEL     = "voyage-finance-2";
-const EXPECTED_DENSE_SIZE = 1024;
+const MODEL_DIMENSIONS = {
+  "voyage-3.5":      1024,
+  "voyage-3.5-lite":  512,
+  "voyage-4":        1024,
+  "voyage-4-lite":   1024,
+};
+
+const EMBEDDING_MODEL = process.env.VOYAGE_MODEL || "voyage-3.5";
+
+if (!MODEL_DIMENSIONS[EMBEDDING_MODEL]) {
+  console.warn(`[config] Unknown VOYAGE_MODEL "${EMBEDDING_MODEL}" — assuming 1024 dims. Update MODEL_DIMENSIONS if needed.`);
+}
+
+const EXPECTED_DENSE_SIZE = MODEL_DIMENSIONS[EMBEDDING_MODEL] ?? 1024;
 
 // ---------------------------------------------------------------------------
 // Multer — 20 MB file size limit

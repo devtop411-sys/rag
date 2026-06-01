@@ -1,0 +1,128 @@
+name: Build & Deploy to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPO_BACKEND: rag-demo-backend
+  ECR_REPO_FRONTEND: rag-demo-frontend
+
+jobs:
+  build-and-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Derive image tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      # ── Backend ──────────────────────────────────────────────────────────────
+      - name: Build & push backend image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG:      ${{ steps.meta.outputs.tag }}
+        run: |
+          docker build \
+            -t "$REGISTRY/$ECR_REPO_BACKEND:$TAG" \
+            -t "$REGISTRY/$ECR_REPO_BACKEND:latest" \
+            -f Dockerfile .
+          docker push "$REGISTRY/$ECR_REPO_BACKEND:$TAG"
+          docker push "$REGISTRY/$ECR_REPO_BACKEND:latest"
+
+      # ── Frontend ─────────────────────────────────────────────────────────────
+      - name: Build & push frontend image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG:      ${{ steps.meta.outputs.tag }}
+        run: |
+          docker build \
+            -t "$REGISTRY/$ECR_REPO_FRONTEND:$TAG" \
+            -t "$REGISTRY/$ECR_REPO_FRONTEND:latest" \
+            -f frontend/Dockerfile frontend/
+          docker push "$REGISTRY/$ECR_REPO_FRONTEND:$TAG"
+          docker push "$REGISTRY/$ECR_REPO_FRONTEND:latest"
+
+  deploy:
+    name: Deploy to EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (for docker-compose.yml)
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Copy docker-compose.yml to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:        ${{ secrets.EC2_HOST }}
+          username:    ${{ secrets.EC2_USER }}
+          key:         ${{ secrets.EC2_SSH_KEY }}
+          source:      docker-compose.yml
+          target:      /home/${{ secrets.EC2_USER }}/rag-demo
+
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key:      ${{ secrets.EC2_SSH_KEY }}
+          envs:     ECR_REGISTRY,IMAGE_TAG,ECR_REPO_BACKEND,ECR_REPO_FRONTEND
+          script: |
+            set -e
+            cd /home/${{ secrets.EC2_USER }}/rag-demo
+
+            # Write runtime env file (secrets injected from GitHub)
+            cat > .env <<EOF
+            ECR_REGISTRY=${{ steps.ecr-login.outputs.registry }}
+            ECR_REPO_BACKEND=${{ env.ECR_REPO_BACKEND }}
+            ECR_REPO_FRONTEND=${{ env.ECR_REPO_FRONTEND }}
+            IMAGE_TAG=${{ needs.build-and-push.outputs.image-tag }}
+            VOYAGE_API_KEY=${{ secrets.VOYAGE_API_KEY }}
+            VOYAGE_MODEL=${{ vars.VOYAGE_MODEL }}
+            QDRANT_URL=${{ secrets.QDRANT_URL }}
+            QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }}
+            QDRANT_COLLECTION=${{ vars.QDRANT_COLLECTION }}
+            API_KEY=${{ secrets.API_KEY }}
+            EOF
+
+            # Authenticate Docker on the EC2 instance against ECR
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} \
+              | docker login --username AWS --password-stdin \
+                  ${{ steps.ecr-login.outputs.registry }}
+
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+            # Clean up old images to save disk space
+            docker image prune -f

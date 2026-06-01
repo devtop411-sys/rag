@@ -8,6 +8,7 @@ on:
 
 jobs:
   deploy:
+    name: Deploy
     runs-on: ubuntu-latest
 
     steps:
@@ -34,24 +35,20 @@ jobs:
             cd "$HOME/rag-demo"
 
             # Update repository
-            git pull origin master
+            git fetch origin master
+            git reset --hard origin/master
 
             # Create .env file
-            cat > .env <<EOF
-  VOYAGE_API_KEY=$VOYAGE_API_KEY
-  VOYAGE_MODEL=voyage-3.5
-  QDRANT_URL=$QDRANT_URL
-  QDRANT_API_KEY=$QDRANT_API_KEY
-  QDRANT_COLLECTION=investment_memos
-  API_KEY=$API_KEY
-  EOF
-  
-  # Verify generated env
-  cat .env
-  
-  # Restart containers
-  docker compose down || true
-  docker compose up -d --build --remove-orphans
-  
-  # Cleanup old images
-  docker image prune -af
+            echo "VOYAGE_API_KEY=$VOYAGE_API_KEY" > .env
+            echo "VOYAGE_MODEL=voyage-3.5" >> .env
+            echo "QDRANT_URL=$QDRANT_URL" >> .env
+            echo "QDRANT_API_KEY=$QDRANT_API_KEY" >> .env
+            echo "QDRANT_COLLECTION=investment_memos" >> .env
+            echo "API_KEY=$API_KEY" >> .env
+
+            # Restart Docker containers
+            docker compose down || true
+            docker compose up -d --build --remove-orphans
+
+            # Clean unused Docker images
+            docker image prune -af

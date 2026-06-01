@@ -1,119 +1,16 @@
-name: Build & Deploy to AWS
+name: Deploy to AWS EC2
 
 on:
   push:
     branches: [master]
   workflow_dispatch:
 
-env:
-  AWS_REGION: eu-west-1
-  # Single ECR repository — backend and frontend use tag prefixes
-  ECR_REPO: rag
-
-  # ── Backend env (passed to the running container) ───────────────────────────
-  BACKEND_PORT: "3001"
-  QDRANT_COLLECTION: investment_memos
-
-  # ── Frontend env (used only at Docker build time by Vite) ───────────────────
-  # Add VITE_* vars here if your React app needs build-time config, e.g.:
-  # VITE_APP_TITLE: RAG Demo
-
 jobs:
-  build-and-push:
-    name: Build & Push to ECR
-    runs-on: ubuntu-latest
-    outputs:
-      image-tag: ${{ steps.meta.outputs.tag }}
-      registry:  ${{ steps.ecr-login.outputs.registry }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Validate required secrets
-        run: |
-          missing=()
-          [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]     && missing+=("AWS_ACCESS_KEY_ID")
-          [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] && missing+=("AWS_SECRET_ACCESS_KEY")
-          [ -z "${{ secrets.VOYAGE_API_KEY }}" ]         && missing+=("VOYAGE_API_KEY")
-          [ -z "${{ secrets.QDRANT_URL }}" ]             && missing+=("QDRANT_URL")
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "❌ Missing secrets — add them at: Settings → Secrets and variables → Actions"
-            for item in "${missing[@]}"; do echo "   • $item"; done
-            exit 1
-          fi
-          echo "✅ All required secrets present. Region: ${{ env.AWS_REGION }}"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ secrets.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Derive image tag
-        id: meta
-        run: echo "tag=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
-
-      # ── Backend ──────────────────────────────────────────────────────────────
-      - name: Build & push backend image
-        env:
-          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          TAG:      ${{ steps.meta.outputs.tag }}
-        run: |
-          docker build \
-            -t "$REGISTRY/$ECR_REPO:backend-$TAG" \
-            -t "$REGISTRY/$ECR_REPO:backend-latest" \
-            -f Dockerfile .
-          docker push "$REGISTRY/$ECR_REPO:backend-$TAG"
-          docker push "$REGISTRY/$ECR_REPO:backend-latest"
-
-      # ── Frontend ─────────────────────────────────────────────────────────────
-      - name: Build & push frontend image
-        env:
-          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          TAG:      ${{ steps.meta.outputs.tag }}
-        run: |
-          docker build \
-            -t "$REGISTRY/$ECR_REPO:frontend-$TAG" \
-            -t "$REGISTRY/$ECR_REPO:frontend-latest" \
-            -f frontend/Dockerfile frontend/
-          docker push "$REGISTRY/$ECR_REPO:frontend-$TAG"
-          docker push "$REGISTRY/$ECR_REPO:frontend-latest"
-
   deploy:
-    name: Deploy to EC2
-    needs: build-and-push
+    name: Deploy
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ secrets.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Copy docker-compose.yml to EC2
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host:     ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key:      ${{ secrets.EC2_SSH_KEY }}
-          source:   docker-compose.yml
-          target:   /home/${{ secrets.EC2_USER }}/rag-demo
-
       - name: Deploy on EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -122,30 +19,25 @@ jobs:
           key:      ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-            cd /home/${{ secrets.EC2_USER }}/rag-demo
 
-            # ── Write .env (Docker Compose reads this automatically) ────────────
-            cat > .env << 'ENVEOF'
-            # ECR image coordinates
-            ECR_REGISTRY=${{ needs.build-and-push.outputs.registry }}
-            ECR_REPO=${{ env.ECR_REPO }}
-            IMAGE_TAG=${{ needs.build-and-push.outputs.image-tag }}
+            # ── Clone repo on first run, pull on subsequent runs ───────────────
+            if [ ! -d ~/rag-demo/.git ]; then
+              git clone https://github.com/${{ github.repository }}.git ~/rag-demo
+            fi
 
-            # Backend runtime config
-            PORT=${{ env.BACKEND_PORT }}
-            VOYAGE_API_KEY=${{ secrets.VOYAGE_API_KEY }}
-            VOYAGE_MODEL=${{ vars.VOYAGE_MODEL || 'voyage-3.5' }}
-            QDRANT_URL=${{ secrets.QDRANT_URL }}
-            QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }}
-            QDRANT_COLLECTION=${{ env.QDRANT_COLLECTION }}
-            API_KEY=${{ secrets.API_KEY }}
-            ENVEOF
+            cd ~/rag-demo
+            git pull origin master
 
-            # ── Authenticate Docker against ECR ─────────────────────────────────
-            aws ecr get-login-password --region ${{ env.AWS_REGION }} \
-              | docker login --username AWS --password-stdin \
-                  ${{ needs.build-and-push.outputs.registry }}
+            # ── Write .env with secrets ────────────────────────────────────────
+            cat > .env <<EOF
+VOYAGE_API_KEY=${{ secrets.VOYAGE_API_KEY }}
+VOYAGE_MODEL=${{ vars.VOYAGE_MODEL || 'voyage-3.5' }}
+QDRANT_URL=${{ secrets.QDRANT_URL }}
+QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }}
+QDRANT_COLLECTION=investment_memos
+API_KEY=${{ secrets.API_KEY }}
+EOF
 
-            docker compose pull
-            docker compose up -d --remove-orphans
+            # ── Build and start containers ─────────────────────────────────────
+            docker compose up -d --build --remove-orphans
             docker image prune -f

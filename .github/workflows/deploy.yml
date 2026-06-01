@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_REGION: eu-west-1
   ECR_REPO_BACKEND: rag-demo-backend
   ECR_REPO_FRONTEND: rag-demo-frontend
 

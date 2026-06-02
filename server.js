@@ -397,6 +397,11 @@ app.get("/documents", requireApiKey, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /health — unauthenticated liveness probe for Docker healthcheck
+// ---------------------------------------------------------------------------
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
+// ---------------------------------------------------------------------------
 app.listen(process.env.PORT || 3001, () => {
   console.log(`RAG service running on port ${process.env.PORT || 3001}`);
   console.log(`Embedding model : ${EMBEDDING_MODEL} (${EXPECTED_DENSE_SIZE} dims, Voyage AI)`);

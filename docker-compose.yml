@@ -5,6 +5,8 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    ports:
+      - "3001:3001"
     environment:
       PORT:              3001
       VOYAGE_API_KEY:    ${VOYAGE_API_KEY}

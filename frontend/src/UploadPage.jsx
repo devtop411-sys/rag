@@ -210,6 +210,8 @@ export default function UploadPage() {
               <dd>{result.source}</dd>
               <dt>Chunks upserted</dt>
               <dd><strong>{result.chunks}</strong></dd>
+              <dt>Meta-query tags</dt>
+              <dd>{result.meta_query_tagged ? "✅ Generated" : "⚠️ Skipped (no OPENAI_API_KEY)"}</dd>
             </dl>
             <details className="result__raw">
               <summary>Raw response</summary>

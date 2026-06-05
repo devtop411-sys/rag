@@ -53,6 +53,119 @@ const MIME_MAP = {
 };
 
 // ---------------------------------------------------------------------------
+// Meta-query tags — financial topics used to annotate each chunk.
+// Stored in the Qdrant payload so Dify can filter/rank by topic.
+// ---------------------------------------------------------------------------
+const META_QUERY_TAGS = [
+  "revenue","sales_growth","net_income","gross_profit","operating_profit",
+  "ebit","ebitda","profit_margin","gross_margin","operating_margin",
+  "cash_flow","operating_cash_flow","free_cash_flow","investing_cash_flow",
+  "financing_cash_flow","capital_expenditure","working_capital","liquidity",
+  "current_ratio","quick_ratio","debt","short_term_debt","long_term_debt",
+  "interest_expense","leverage","credit_rating","assets","current_assets",
+  "fixed_assets","inventory","accounts_receivable","accounts_payable",
+  "equity","shareholders_equity","retained_earnings","dividends",
+  "share_buybacks","earnings_per_share","valuation","market_cap",
+  "enterprise_value","price_to_earnings","price_to_book","price_to_sales",
+  "guidance","forecast","financial_targets","growth_strategy",
+  "investment_strategy","mergers_acquisitions","acquisition","divestiture",
+  "business_segments","geographic_revenue","customers","customer_concentration",
+  "suppliers","competition","market_share","risk_factors","regulatory_risk",
+  "legal_risk","cybersecurity_risk","operational_risk","liquidity_risk",
+  "credit_risk","interest_rate_risk","foreign_exchange_risk","inflation_risk",
+  "sustainability","esg","carbon_emissions","governance","executive_compensation",
+  "board_of_directors","shareholder_meeting","tax","effective_tax_rate",
+  "research_and_development","innovation","artificial_intelligence",
+  "technology_investment","cloud_business","subscription_revenue",
+  "recurring_revenue","cost_reduction","restructuring","layoffs","headcount",
+  "employee_costs","earnings_call","quarterly_results","annual_report",
+  "investor_relations",
+];
+
+const META_QUERY_TAG_SET = new Set(META_QUERY_TAGS);
+
+// ---------------------------------------------------------------------------
+// Concurrency limiter — runs `tasks` (thunks) at most `limit` at a time.
+// ---------------------------------------------------------------------------
+async function runWithConcurrency(tasks, limit) {
+  const results = new Array(tasks.length);
+  const executing = new Set();
+  let idx = 0;
+
+  async function runNext() {
+    if (idx >= tasks.length) return;
+    const i = idx++;
+    const p = tasks[i]().then((r) => { results[i] = r; executing.delete(p); });
+    executing.add(p);
+    if (executing.size >= limit) await Promise.race(executing);
+    await runNext();
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, runNext));
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// Meta-query generation via OpenAI-compatible LLM.
+// Returns an array of matched tags (subset of META_QUERY_TAGS).
+// Skipped entirely when OPENAI_API_KEY is not set.
+// ---------------------------------------------------------------------------
+async function generateMetaQuery(chunkText) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return [];
+
+  const baseUrl   = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+  const model     = process.env.OPENAI_MODEL    || "gpt-4o-mini";
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method:  "POST",
+    headers: {
+      "Content-Type":  "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role:    "system",
+          content: "You are a financial document analyst. Respond only with valid JSON.",
+        },
+        {
+          role:    "user",
+          content: `Analyze the financial document excerpt below and return a JSON object with a single key "tags" whose value is an array of relevant topic identifiers chosen ONLY from the allowed list. Select up to 15 tags that are directly discussed or referenced in the text. If nothing applies, return {"tags":[]}.
+
+Allowed tags: ${META_QUERY_TAGS.join(", ")}
+
+Text:
+${chunkText}`,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    console.error(`[meta_query] LLM error (${response.status}): ${err}`);
+    return [];
+  }
+
+  try {
+    const data    = await response.json();
+    const content = data.choices?.[0]?.message?.content ?? "{}";
+    const parsed  = JSON.parse(content);
+    const tags    = Array.isArray(parsed.tags) ? parsed.tags : [];
+    const matched = tags.filter((t) => META_QUERY_TAG_SET.has(t));
+    console.log(`[meta_query] chunk → ${matched.length} tags: ${matched.join(", ") || "(none)"}`);
+    return matched;
+  } catch (e) {
+    console.error("[meta_query] Failed to parse LLM response:", e.message);
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Clients
 // ---------------------------------------------------------------------------
 const qdrant = new QdrantClient({
@@ -244,8 +357,29 @@ app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
       rawText = buffer.toString("utf8");
     }
 
-    const splitter = new RecursiveCharacterTextSplitter({ chunkSize, chunkOverlap });
-    const chunks   = await splitter.splitText(rawText);
+    // If the text uses markdown-style headers (# / ## / ###), split on each
+    // header boundary first so every section becomes its own chunk.
+    // Long sections are then further split by the character splitter.
+    // Plain text (PDFs, no headers) goes straight to character splitting.
+    const fallback = new RecursiveCharacterTextSplitter({ chunkSize, chunkOverlap });
+    let chunks;
+
+    const looksLikeMarkdown = /^#{1,3} /m.test(rawText);
+    if (looksLikeMarkdown) {
+      const sections = rawText
+        .split(/\n(?=#{1,3} )/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      const parts = await Promise.all(
+        sections.map((s) =>
+          s.length > chunkSize ? fallback.splitText(s) : [s],
+        ),
+      );
+      chunks = parts.flat().filter(Boolean);
+    } else {
+      chunks = await fallback.splitText(rawText);
+    }
 
     if (!chunks.length) {
       await safeUnlink(tempPath);
@@ -254,7 +388,7 @@ app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
 
     console.log(`[ingest] "${source}" (${fileType}, ${fileSize} bytes) → ${chunks.length} chunks`);
 
-    // Dense embeddings via Voyage AI voyage-finance-2 → 1024 dims
+    // Dense embeddings via Voyage AI → EXPECTED_DENSE_SIZE dims
     const denseEmbeddings = await embedTexts(chunks);
 
     // Validate returned vector size matches expected
@@ -265,13 +399,27 @@ app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
       });
     }
 
+    // Meta-query tags — run LLM in parallel (5 concurrent) to label each chunk.
+    // Falls back to [] per chunk when OPENAI_API_KEY is not configured.
+    const metaQueryEnabled = !!process.env.OPENAI_API_KEY;
+    let metaQueries = chunks.map(() => []);
+    if (metaQueryEnabled) {
+      console.log(`[ingest] Generating meta_query tags for ${chunks.length} chunks…`);
+      metaQueries = await runWithConcurrency(
+        chunks.map((text) => () => generateMetaQuery(text)),
+        5,
+      );
+      const totalTags = metaQueries.reduce((s, t) => s + t.length, 0);
+      console.log(`[ingest] meta_query done — ${totalTags} tags across ${chunks.length} chunks`);
+    }
+
     await ensureCollection(denseEmbeddings[0].length);
 
     const documentId = uuidv4();
 
     const points = chunks.map((text, index) => ({
       id:     uuidv4(),
-      vector: denseEmbeddings[index],            // unnamed default vector, 1024-dim Voyage AI
+      vector: denseEmbeddings[index],
       payload: {
         document_id:       documentId,
         source,
@@ -281,6 +429,7 @@ app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
         type:              fileType,
         chunk_index:       index,
         text,
+        meta_query:        metaQueries[index],
         embedding_model:   EMBEDDING_MODEL,
         created_at:        new Date().toISOString(),
       },
@@ -292,12 +441,13 @@ app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
     console.log(`[ingest] Upserted ${points.length} points (${EXPECTED_DENSE_SIZE}-dim Voyage AI) into "${COLLECTION}"`);
 
     res.json({
-      ok:           true,
-      document_id:  documentId,
+      ok:                true,
+      document_id:       documentId,
       source,
-      chunks:       chunks.length,
-      embedding_model: EMBEDDING_MODEL,
-      vector_size:  EXPECTED_DENSE_SIZE,
+      chunks:            chunks.length,
+      meta_query_tagged: metaQueryEnabled,
+      embedding_model:   EMBEDDING_MODEL,
+      vector_size:       EXPECTED_DENSE_SIZE,
     });
   } catch (error) {
     console.error("[ingest] error:", error);

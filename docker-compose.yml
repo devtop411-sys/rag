@@ -30,6 +30,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_API_KEY: ${VITE_API_KEY:-}
     restart: unless-stopped
     ports:
       - "8080:80"

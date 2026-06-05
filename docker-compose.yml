@@ -15,6 +15,9 @@ services:
       QDRANT_API_KEY:    ${QDRANT_API_KEY}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-investment_memos}
       API_KEY:           ${API_KEY}
+      OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
+      OPENAI_MODEL:      ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_BASE_URL:   ${OPENAI_BASE_URL:-}
     volumes:
       - uploads:/app/uploads
     networks:

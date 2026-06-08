@@ -627,6 +627,8 @@ app.get("/documents", requireApiKey, async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.post("/slack/events", async (req, res) => {
+  console.log("SLACK REQUEST:", JSON.stringify(req.body, null, 2));
+
   const body = req.body;
 
   if (body.type === "url_verification") {
@@ -636,12 +638,13 @@ app.post("/slack/events", async (req, res) => {
   res.sendStatus(200);
 
   const event = body.event;
+  console.log("EVENT:", event);
 
   if (!event || event.bot_id) return;
   if (event.type !== "app_mention" && event.type !== "message") return;
 
   const question = event.text.replace(/<@[^>]+>/g, "").trim();
-
+  console.log("QUESTION:", question);
   const difyResponse = await fetch("http://34.245.224.130/v1/chat-messages", {
     method: "POST",
     headers: {
@@ -657,7 +660,7 @@ app.post("/slack/events", async (req, res) => {
   });
 
   const data = await difyResponse.json();
-
+  console.log("DIFY RESPONSE:", data);
   await slack.chat.postMessage({
     channel: event.channel,
     thread_ts: event.ts,

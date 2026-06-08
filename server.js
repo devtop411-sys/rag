@@ -5,6 +5,7 @@ import fs from "fs/promises";
 import path from "path";
 import pdfParse from "pdf-parse";
 import dotenv from "dotenv";
+import { WebClient } from "@slack/web-api";
 import { v4 as uuidv4 } from "uuid";
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
@@ -14,7 +15,7 @@ dotenv.config();
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
-
+const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 // ---------------------------------------------------------------------------
 // Embedding model config — single source of truth
 // Both ingest and query MUST use the same model and size.
@@ -625,6 +626,44 @@ app.get("/documents", requireApiKey, async (req, res) => {
 // GET /health — unauthenticated liveness probe for Docker healthcheck
 // ---------------------------------------------------------------------------
 app.get("/health", (_req, res) => res.json({ ok: true }));
+app.post("/slack/events", async (req, res) => {
+  const body = req.body;
+
+  if (body.type === "url_verification") {
+    return res.send(body.challenge);
+  }
+
+  res.sendStatus(200);
+
+  const event = body.event;
+
+  if (!event || event.bot_id) return;
+  if (event.type !== "app_mention" && event.type !== "message") return;
+
+  const question = event.text.replace(/<@[^>]+>/g, "").trim();
+
+  const difyResponse = await fetch("http://34.245.224.130/v1/chat-messages", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.DIFY_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      inputs: {},
+      query: question,
+      response_mode: "blocking",
+      user: event.user,
+    }),
+  });
+
+  const data = await difyResponse.json();
+
+  await slack.chat.postMessage({
+    channel: event.channel,
+    thread_ts: event.ts,
+    text: data.answer || "No answer from Dify",
+  });
+});
 
 // ---------------------------------------------------------------------------
 app.listen(process.env.PORT || 3001, () => {

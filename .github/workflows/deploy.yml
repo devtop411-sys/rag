@@ -19,11 +19,13 @@ jobs:
           QDRANT_URL: ${{ secrets.QDRANT_URL }}
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
           API_KEY: ${{ secrets.API_KEY }}
+          SLACK_BOT_TOKEN: ${{secrets.SLACK_BOT_TOKEN}}
+          DIFY_API_KEY: ${{secrets.DIFY_API_KEY}}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: VOYAGE_API_KEY,QDRANT_URL,QDRANT_API_KEY,API_KEY
+          envs: VOYAGE_API_KEY,QDRANT_URL,QDRANT_API_KEY,API_KEY,SLACK_BOT_TOKEN,DIFY_API_KEY
           script: |
             set -e
 

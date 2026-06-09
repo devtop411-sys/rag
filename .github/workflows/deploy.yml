@@ -47,6 +47,8 @@ jobs:
             echo "QDRANT_API_KEY=$QDRANT_API_KEY" >> .env
             echo "QDRANT_COLLECTION=investment_memos" >> .env
             echo "API_KEY=$API_KEY" >> .env
+            echo "SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN" >> .env
+            echo "DIFY_API_KEY=$DIFY_API_KEY" >> .env
 
             # Restart Docker containers
             docker compose down || true

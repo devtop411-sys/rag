@@ -20,8 +20,6 @@ services:
       OPENAI_BASE_URL:   ${OPENAI_BASE_URL:-}
       SLACK_BOT_TOKEN:   ${SLACK_BOT_TOKEN}
       DIFY_API_KEY:      ${DIFY_API_KEY}
-      DIFY_API_KEY: ${DIFY_API_KEY}
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
     volumes:
       - uploads:/app/uploads
     networks:

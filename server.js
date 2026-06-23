@@ -9,9 +9,14 @@ import { WebClient } from "@slack/web-api";
 import { v4 as uuidv4 } from "uuid";
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import mammoth from "mammoth";
 
-dotenv.config();
+dotenv.config({ override: true });
 
+console.log(process.env.AWS_ACCESS_KEY_ID);
+console.log('test22312',process.env.AWS_SECRET_ACCESS_KEY?.length);
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
@@ -40,6 +45,12 @@ const EXPECTED_DENSE_SIZE = MODEL_DIMENSIONS[EMBEDDING_MODEL] ?? 1024;
 // ---------------------------------------------------------------------------
 const upload = multer({
   dest: "uploads/",
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
+
+// Memory-based multer for S3 uploads (no disk I/O needed)
+const uploadMemory = multer({
+  storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
 });
 
@@ -170,9 +181,50 @@ ${chunkText}`,
 // Clients
 // ---------------------------------------------------------------------------
 const qdrant = new QdrantClient({
-  url:    process.env.QDRANT_URL,
-  apiKey: process.env.QDRANT_API_KEY || undefined,
+  url:                 process.env.QDRANT_URL,
+  apiKey:              process.env.QDRANT_API_KEY || undefined,
+  checkCompatibility:  false,
 });
+
+const s3 = new S3Client({
+  region: process.env.AWS_REGION || "us-east-1",
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
+
+const S3_BUCKET  = process.env.S3_BUCKET;
+const S3_PREFIX  = "uploads/";
+const PRESIGN_TTL = 300; // seconds
+
+const ALLOWED_S3_EXTENSIONS = new Set([".pdf", ".txt", ".md", ".docx"]);
+
+// Convert a ReadableStream (S3 Body) to Buffer
+async function streamToBuffer(stream) {
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+// Extract raw text from a buffer based on file extension
+async function extractText(buffer, ext) {
+  switch (ext) {
+    case ".pdf": {
+      const parsed = await pdfParse(buffer);
+      return parsed.text;
+    }
+    case ".docx": {
+      const { value } = await mammoth.extractRawText({ buffer });
+      return value;
+    }
+    case ".txt":
+    case ".md":
+      return buffer.toString("utf8");
+    default:
+      throw new Error(`Unsupported file type "${ext}"`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // API key middleware
@@ -274,16 +326,23 @@ function buildSparseVector(text) {
 // Auto-migrates collections with wrong size or named-vector schema.
 // ---------------------------------------------------------------------------
 async function ensureCollection(denseSize) {
-  const { collections } = await qdrant.getCollections();
-  const exists = collections.some((c) => c.name === COLLECTION);
+  let exists = false;
+  let currentSize = null;
+  let isUnnamed = false;
+
+  try {
+    const info   = await qdrant.getCollection(COLLECTION);
+    const params = info.config?.params?.vectors;
+    isUnnamed    = params && typeof params.size === "number";
+    currentSize  = isUnnamed ? params.size : null;
+    exists       = true;
+  } catch (err) {
+    // 404 / "Not Found" means the collection doesn't exist yet — that's fine
+    const is404 = err.message === "Not Found" || err.$metadata?.httpStatusCode === 404;
+    if (!is404) throw err; // re-throw unexpected errors
+  }
 
   if (exists) {
-    const info        = await qdrant.getCollection(COLLECTION);
-    const params      = info.config?.params?.vectors;
-    // Unnamed default vector is stored directly as { size, distance } object
-    const isUnnamed   = params && typeof params.size === "number";
-    const currentSize = isUnnamed ? params.size : null;
-
     if (isUnnamed && currentSize === denseSize) {
       return; // Already correct — nothing to do
     }
@@ -618,6 +677,220 @@ app.get("/documents", requireApiKey, async (req, res) => {
     res.json({ documents: Array.from(seen.values()) });
   } catch (error) {
     console.error("[documents] error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/s3/upload — upload files directly through the backend to S3
+// Multipart form: field name "files" (multiple)
+// Reply: { files: [{ fileName, key }] }
+// ---------------------------------------------------------------------------
+app.post("/api/s3/upload", requireApiKey, uploadMemory.array("files", 20), async (req, res) => {
+  try {
+    if (!S3_BUCKET) return res.status(500).json({ error: "S3_BUCKET not configured" });
+    if (!req.files?.length) return res.status(400).json({ error: "No files received — ensure field name is 'files'" });
+
+    const results = await Promise.all(
+      req.files.map(async (file) => {
+        const ext = path.extname(file.originalname).toLowerCase();
+        if (!ALLOWED_S3_EXTENSIONS.has(ext)) {
+          throw new Error(`Unsupported file type "${ext}". Allowed: .pdf .txt .md .docx`);
+        }
+        const safe        = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const key         = `${S3_PREFIX}${uuidv4()}-${safe}`;
+        const contentType = MIME_MAP[ext] ?? "application/octet-stream";
+
+        await s3.send(new PutObjectCommand({
+          Bucket:      S3_BUCKET,
+          Key:         key,
+          Body:        file.buffer,
+        }));
+
+        console.log(`[s3/upload] Uploaded "${file.originalname}" → ${key}`);
+        return { fileName: file.originalname, key };
+      }),
+    );
+
+    res.json({ files: results });
+  } catch (error) {
+    console.error("[s3/upload] error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/s3/files — list uploaded files in S3_PREFIX
+// Reply: { files: [{ key, fileName, size, lastModified }] }
+// ---------------------------------------------------------------------------
+app.get("/api/s3/files", requireApiKey, async (req, res) => {
+  try {
+    if (!S3_BUCKET) return res.status(500).json({ error: "S3_BUCKET not configured" });
+
+    const command = new ListObjectsV2Command({ Bucket: S3_BUCKET, Prefix: S3_PREFIX });
+    const data    = await s3.send(command);
+
+    const files = (data.Contents ?? [])
+      .filter((obj) => obj.Key !== S3_PREFIX)          // skip the folder placeholder
+      .map((obj) => ({
+        key:          obj.Key,
+        fileName:     obj.Key.replace(S3_PREFIX, "").replace(/^[0-9a-f-]+-/, ""), // strip uuid prefix
+        size:         obj.Size,
+        lastModified: obj.LastModified,
+      }));
+
+    res.json({ files });
+  } catch (error) {
+    console.error("[s3/files] error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/s3/file — delete file from S3 (+ optionally its Qdrant vectors)
+// Body:  { key }
+// ---------------------------------------------------------------------------
+app.delete("/api/s3/file", requireApiKey, async (req, res) => {
+  try {
+    if (!S3_BUCKET) return res.status(500).json({ error: "S3_BUCKET not configured" });
+
+    const { key } = req.body;
+    if (!key) return res.status(400).json({ error: "key is required" });
+
+    await s3.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: key }));
+    console.log(`[s3/delete] Deleted S3 object: ${key}`);
+
+    // Best-effort: remove Qdrant vectors that came from this S3 key
+    try {
+      await qdrant.delete(COLLECTION, {
+        wait:   true,
+        filter: { must: [{ key: "fileKey", match: { value: key } }] },
+      });
+      console.log(`[s3/delete] Removed Qdrant vectors for fileKey: ${key}`);
+    } catch { /* Qdrant cleanup is optional — don't fail the request */ }
+
+    res.json({ ok: true, key });
+  } catch (error) {
+    console.error("[s3/delete] error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/ingest/s3 — download files from S3, chunk, embed, upsert to Qdrant
+// Body:  { files: [{ key }], knowledgeBaseId? }
+// Reply: { status, results: [{ key, status, chunks?, error? }] }
+// ---------------------------------------------------------------------------
+app.post("/api/ingest/s3", requireApiKey, async (req, res) => {
+  try {
+    if (!S3_BUCKET) return res.status(500).json({ error: "S3_BUCKET not configured" });
+
+    const { files, knowledgeBaseId = "kb_default" } = req.body;
+    if (!Array.isArray(files) || !files.length) {
+      return res.status(400).json({ error: "files array is required" });
+    }
+
+    const results = [];
+
+    for (const { key } of files) {
+      try {
+        const ext      = path.extname(key).toLowerCase();
+        const fileName = path.basename(key).replace(/^[0-9a-f-]+-/, "");
+
+        // 1. Download from S3
+        console.log(`[ingest/s3] Step 1: Downloading "${key}" from S3…`);
+        const s3Obj = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
+        const buffer = await streamToBuffer(s3Obj.Body);
+        console.log(`[ingest/s3] Step 1: Downloaded ${buffer.length} bytes`);
+
+        // 2. Extract text
+        console.log(`[ingest/s3] Step 2: Extracting text (ext=${ext})…`);
+        const rawText = await extractText(buffer, ext);
+        if (!rawText.trim()) throw new Error("No text extracted from file");
+        console.log(`[ingest/s3] Step 2: Extracted ${rawText.length} chars`);
+
+        // 3. Chunk
+        const looksLikeMarkdown = ext === ".md" || /^#{1,3} /m.test(rawText);
+        const fallback = new RecursiveCharacterTextSplitter({ chunkSize: 800, chunkOverlap: 150 });
+        let chunks;
+        if (looksLikeMarkdown) {
+          const sections = rawText.split(/\n(?=#{1,3} )/).map((s) => s.trim()).filter(Boolean);
+          const parts    = await Promise.all(
+            sections.map((s) => s.length > 800 ? fallback.splitText(s) : [s]),
+          );
+          chunks = parts.flat().filter(Boolean);
+        } else {
+          chunks = await fallback.splitText(rawText);
+        }
+        if (!chunks.length) throw new Error("No chunks generated");
+
+        console.log(`[ingest/s3] "${fileName}" → ${chunks.length} chunks`);
+
+        // 4. Embed
+        console.log(`[ingest/s3] Step 4: Embedding ${chunks.length} chunks…`);
+        const embeddings = await embedTexts(chunks);
+        console.log(`[ingest/s3] Step 4: Embeddings done (dim=${embeddings[0].length})`);
+
+        // 5. Meta-query tags (optional)
+        const metaQueryEnabled = !!process.env.OPENAI_API_KEY;
+        let metaQueries = chunks.map(() => []);
+        if (metaQueryEnabled) {
+          console.log(`[ingest/s3] Step 5: Generating meta-query tags…`);
+          metaQueries = await runWithConcurrency(
+            chunks.map((text) => () => generateMetaQuery(text)),
+            5,
+          );
+          console.log(`[ingest/s3] Step 5: Meta-query done`);
+        }
+
+        // 6. Ensure collection
+        console.log(`[ingest/s3] Step 6: Ensuring Qdrant collection…`);
+        await ensureCollection(embeddings[0].length);
+        console.log(`[ingest/s3] Step 6: Collection ready`);
+
+        // 7. Upsert to Qdrant
+        console.log(`[ingest/s3] Step 7: Upserting to Qdrant…`);
+        const documentId = uuidv4();
+        const points = chunks.map((text, i) => ({
+          id:     uuidv4(),
+          vector: embeddings[i],
+          payload: {
+            knowledgeBaseId,
+            fileKey:         key,
+            fileName,
+            document_id:     documentId,
+            source:          "s3",
+            chunk_index:     i,
+            text,
+            meta_query:      metaQueries[i],
+            embedding_model: EMBEDDING_MODEL,
+            created_at:      new Date().toISOString(),
+          },
+        }));
+
+        await qdrant.upsert(COLLECTION, { wait: true, points });
+        console.log(`[ingest/s3] Upserted ${points.length} vectors for "${fileName}"`);
+
+        results.push({ key, status: "ingested", chunks: chunks.length });
+      } catch (err) {
+        console.error(`[ingest/s3] Failed "${key}":`, {
+          message:    err.message,
+          code:       err.Code ?? err.code ?? err.name,
+          statusCode: err.$metadata?.httpStatusCode,
+          requestId:  err.$metadata?.requestId,
+        });
+        results.push({ key, status: "failed", error: err.message });
+      }
+    }
+
+    const allOk = results.every((r) => r.status === "ingested");
+    const anyOk = results.some((r)  => r.status === "ingested");
+    res.json({
+      status:  allOk ? "ok" : anyOk ? "partial_success" : "failed",
+      results,
+    });
+  } catch (error) {
+    console.error("[ingest/s3] error:", error);
     res.status(500).json({ error: error.message });
   }
 });

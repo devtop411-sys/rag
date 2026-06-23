@@ -20,6 +20,11 @@ services:
       OPENAI_BASE_URL:   ${OPENAI_BASE_URL:-}
       SLACK_BOT_TOKEN:   ${SLACK_BOT_TOKEN}
       DIFY_API_KEY:      ${DIFY_API_KEY}
+      GOOGLE_CLIENT_ID:  ${GOOGLE_CLIENT_ID:-}
+      S3_BUCKET:            ${S3_BUCKET:-rag-files-340752823591}
+      AWS_REGION:           ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID:    ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
     volumes:
       - uploads:/app/uploads
     networks:
@@ -36,8 +41,9 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: ${VITE_API_URL:-}
-        VITE_API_KEY: ${VITE_API_KEY:-}
+        VITE_API_URL:          ${VITE_API_URL:-}
+        VITE_API_KEY:          ${VITE_API_KEY:-}
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     restart: unless-stopped
     ports:
       - "8080:80"

@@ -5,11 +5,12 @@ const API_KEY     = import.meta.env.VITE_API_KEY ?? "";
 const authHeaders = API_KEY ? { "x-api-key": API_KEY } : {};
 
 const STATUS_LABEL = {
-  uploaded:  { label: "Uploaded",  cls: "badge--idle" },
-  uploading: { label: "Uploading…",cls: "badge--loading" },
-  ingesting: { label: "Ingesting…",cls: "badge--loading" },
-  ingested:  { label: "Ingested",  cls: "badge--success" },
-  failed:    { label: "Failed",    cls: "badge--error" },
+  uploaded:  { label: "Uploaded",   cls: "badge--idle" },
+  uploading: { label: "Uploading…", cls: "badge--loading" },
+  ingesting: { label: "Ingesting…", cls: "badge--loading" },
+  ingested:  { label: "Ingested",   cls: "badge--success" },
+  failed:    { label: "Failed",     cls: "badge--error" },
+  duplicate: { label: "Duplicate",  cls: "badge--error" },
 };
 
 function formatSize(bytes) {
@@ -73,7 +74,8 @@ export default function S3Page() {
         prev.map((f) => {
           if (f.status !== "uploading") return f;
           const r = resultMap[f.fileName];
-          if (!r) return { ...f, status: "failed", error: "No result from server" };
+          if (!r)            return { ...f, status: "failed",    error: "No result from server" };
+          if (r.duplicate)   return { ...f, status: "duplicate", error: "Already exists in S3" };
           return { ...f, key: r.key, status: "uploaded" };
         }),
       );

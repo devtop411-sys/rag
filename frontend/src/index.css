@@ -400,3 +400,117 @@ input[type="number"]::-webkit-inner-spin-button { opacity: 0.4; }
   margin-left: 4px;
   font-size: 12px;
 }
+
+/* ---- Login page ---- */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0f1117;
+  padding: 16px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  background: #161b27;
+  border: 1px solid #1e2535;
+  border-radius: 20px;
+  padding: 48px 36px 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.login-logo {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.login-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #f1f5f9;
+  letter-spacing: -0.02em;
+}
+
+.login-subtitle {
+  font-size: 13px;
+  color: #64748b;
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.login-btn-wrap {
+  margin-top: 8px;
+  display: flex;
+  justify-content: center;
+  min-height: 44px;
+  align-items: center;
+}
+
+.login-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+.login-error {
+  margin-top: 4px;
+  background: #1c0a0a;
+  border: 1px solid #7f1d1d;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #f87171;
+  text-align: center;
+  width: 100%;
+}
+
+/* ---- Nav user section ---- */
+.nav-user {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+}
+
+.nav-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.nav-email {
+  font-size: 12px;
+  color: #64748b;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-signout {
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  background: none;
+  border: 1px solid #1e2535;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.nav-signout:hover {
+  color: #e2e8f0;
+  border-color: #334155;
+}

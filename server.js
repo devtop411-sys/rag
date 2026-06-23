@@ -381,6 +381,44 @@ async function safeUnlink(filePath) {
 }
 
 // ---------------------------------------------------------------------------
+// POST /auth/google — verify Google ID token, restrict to @collider.vc
+// Body:  { credential }   (the JWT returned by the Google Sign-In button)
+// Reply: { ok, email, name, picture }
+// ---------------------------------------------------------------------------
+const ALLOWED_DOMAIN = "collider.vc";
+
+app.post("/auth/google", async (req, res) => {
+  try {
+    const { credential } = req.body ?? {};
+    if (!credential) return res.status(400).json({ error: "credential is required" });
+
+    const r = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`);
+    if (!r.ok) return res.status(401).json({ error: "Invalid Google token" });
+
+    const payload = await r.json();
+
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (clientId && payload.aud !== clientId) {
+      return res.status(401).json({ error: "Token audience mismatch" });
+    }
+
+    const email = (payload.email ?? "").toLowerCase();
+    const ALLOWED_EMAILS = new Set(["devtop411@gmail.com"]);
+    if (!email.endsWith(`@${ALLOWED_DOMAIN}`) && !ALLOWED_EMAILS.has(email)) {
+      return res.status(403).json({
+        error: `Access restricted to @${ALLOWED_DOMAIN} accounts`,
+      });
+    }
+
+    console.log(`[auth/google] Login: ${email}`);
+    res.json({ ok: true, email, name: payload.name ?? email, picture: payload.picture ?? null });
+  } catch (error) {
+    console.error("[auth/google] error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /ingest — parse, chunk, embed (Voyage AI), upsert unnamed default vectors
 // ---------------------------------------------------------------------------
 app.post("/ingest", requireApiKey, upload.single("file"), async (req, res) => {
@@ -691,20 +729,31 @@ app.post("/api/s3/upload", requireApiKey, uploadMemory.array("files", 20), async
     if (!S3_BUCKET) return res.status(500).json({ error: "S3_BUCKET not configured" });
     if (!req.files?.length) return res.status(400).json({ error: "No files received — ensure field name is 'files'" });
 
+    // Build a set of already-uploaded filenames (strip uuid prefix from existing keys)
+    const listData = await s3.send(new ListObjectsV2Command({ Bucket: S3_BUCKET, Prefix: S3_PREFIX }));
+    const existingNames = new Set(
+      (listData.Contents ?? [])
+        .map((obj) => obj.Key.replace(S3_PREFIX, "").replace(/^[0-9a-f-]+-/, ""))
+    );
+
     const results = await Promise.all(
       req.files.map(async (file) => {
-        const ext = path.extname(file.originalname).toLowerCase();
+        const ext  = path.extname(file.originalname).toLowerCase();
         if (!ALLOWED_S3_EXTENSIONS.has(ext)) {
           throw new Error(`Unsupported file type "${ext}". Allowed: .pdf .txt .md .docx`);
         }
-        const safe        = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
-        const key         = `${S3_PREFIX}${uuidv4()}-${safe}`;
-        const contentType = MIME_MAP[ext] ?? "application/octet-stream";
+        const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
 
+        if (existingNames.has(safe)) {
+          console.log(`[s3/upload] Skipped duplicate "${file.originalname}"`);
+          return { fileName: file.originalname, key: null, duplicate: true };
+        }
+
+        const key = `${S3_PREFIX}${uuidv4()}-${safe}`;
         await s3.send(new PutObjectCommand({
-          Bucket:      S3_BUCKET,
-          Key:         key,
-          Body:        file.buffer,
+          Bucket: S3_BUCKET,
+          Key:    key,
+          Body:   file.buffer,
         }));
 
         console.log(`[s3/upload] Uploaded "${file.originalname}" → ${key}`);

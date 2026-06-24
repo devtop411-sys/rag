@@ -4,7 +4,8 @@
   "description": "RAG pipeline: PDF → Voyage AI → Qdrant → Dify → GPT-4.1",
   "type": "module",
   "scripts": {
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "start": "node src/server.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1072.0",

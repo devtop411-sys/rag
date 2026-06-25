@@ -55,8 +55,9 @@ jobs:
             echo "API_KEY=$API_KEY"                  >> .env
             echo "SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN"  >> .env
             echo "DIFY_API_KEY=$DIFY_API_KEY"        >> .env
-            echo "GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID" >> .env
-            echo "OPENAI_API_KEY=$OPENAI_API_KEY"    >> .env
+            echo "GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID"         >> .env
+            echo "VITE_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID"   >> .env
+            echo "OPENAI_API_KEY=$OPENAI_API_KEY"            >> .env
             echo "S3_BUCKET=$S3_BUCKET"                          >> .env
             echo "AWS_REGION=${AWS_REGION:-us-east-1}"          >> .env
             echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"         >> .env

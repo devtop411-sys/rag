@@ -41,9 +41,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL:          ${VITE_API_URL:-}
-        VITE_API_KEY:          ${VITE_API_KEY:-}
-        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+        VITE_API_URL:                ${VITE_API_URL:-}
+        VITE_API_KEY:                ${VITE_API_KEY:-}
+        VITE_GOOGLE_CLIENT_ID:       ${GOOGLE_CLIENT_ID:-}
+        VITE_GOOGLE_DRIVE_CLIENT_ID: ${VITE_GOOGLE_DRIVE_CLIENT_ID:-}
     restart: unless-stopped
     ports:
       - "8080:80"

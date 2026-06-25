@@ -26,6 +26,24 @@ import { parsePdfDate } from "../utils/date.utils.js";
 import { runWithConcurrency } from "../utils/concurrency.utils.js";
 
 // ---------------------------------------------------------------------------
+// Returns true when at least one Qdrant point already exists for the given
+// payload field/value pair.  Treats a missing collection as "not ingested".
+// ---------------------------------------------------------------------------
+async function isAlreadyIngested(filterKey, filterValue) {
+  try {
+    const result = await qdrant.scroll(COLLECTION, {
+      filter: { must: [{ key: filterKey, match: { value: filterValue } }] },
+      limit: 1,
+      with_payload: false,
+      with_vector: false,
+    });
+    return result.points.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Shared helper: chunk raw text using RecursiveCharacterTextSplitter.
 // Markdown files are pre-split on header boundaries first.
 // ---------------------------------------------------------------------------
@@ -66,10 +84,19 @@ export async function ingestFile(req, res) {
       });
     }
 
+    const originalFilename = req.file.originalname;
+
+    if (await isAlreadyIngested("original_filename", originalFilename)) {
+      await safeUnlink(tempPath);
+      return res.status(409).json({
+        error: `File "${originalFilename}" has already been ingested.`,
+        already_ingested: true,
+      });
+    }
+
     const source           = req.body.source || req.file.originalname;
     const chunkSize        = parseInt(req.body.chunkSize)    || 1200;
     const chunkOverlap     = parseInt(req.body.chunkOverlap) || 250;
-    const originalFilename = req.file.originalname;
     const fileSize         = req.file.size;
     const mimeType         = MIME_MAP[ext] ?? "application/octet-stream";
     const fileType         = ext === ".pdf" ? "pdf" : "text";
@@ -201,6 +228,13 @@ export async function ingestFromS3(req, res) {
           typeof fileAuthor === "string" && fileAuthor.trim() ? fileAuthor.trim() : null;
         const callerDate =
           typeof fileDate === "string" && fileDate.trim() ? fileDate.trim() : null;
+
+        // 0. Skip if already ingested
+        if (await isAlreadyIngested("fileKey", key)) {
+          console.log(`[ingest/s3] Skipping "${key}" — already ingested`);
+          results.push({ key, status: "skipped", reason: "already ingested" });
+          continue;
+        }
 
         // 1. Download from S3
         console.log(`[ingest/s3] Step 1: Downloading "${key}" from S3…`);

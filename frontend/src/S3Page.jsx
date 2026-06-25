@@ -110,7 +110,7 @@ export default function S3Page() {
         prev.map((f) => {
           const r = resultMap[f.key];
           if (!r) return f;
-          return { ...f, status: r.status === "ingested" ? "ingested" : "failed", error: r.error };
+          return { ...f, status: (r.status === "ingested" || r.status === "skipped") ? "ingested" : "failed", error: r.error };
         }),
       );
     } catch (err) {

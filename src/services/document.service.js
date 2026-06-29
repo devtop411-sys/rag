@@ -95,6 +95,153 @@ ${chunkText}`,
 }
 
 // ---------------------------------------------------------------------------
+// Chunk-level metadata generation via LLM.
+// Returns summary, keywords, and example search queries for a chunk.
+// Used to enrich the embedding text and improve retrieval for vague queries.
+// Skipped entirely when OPENAI_API_KEY is not set.
+// ---------------------------------------------------------------------------
+export async function generateChunkMetadata(chunkText) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+
+  const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+  const model   = process.env.OPENAI_MODEL    || "gpt-4o-mini";
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method:  "POST",
+    headers: {
+      "Content-Type":  "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role:    "system",
+          content: "You are generating search metadata for a RAG system. Respond only with valid JSON.",
+        },
+        {
+          role:    "user",
+          content: `Given this document chunk, generate:
+1. A short summary of what it is about
+2. Keywords (include synonyms, both specific and general terms)
+3. Possible user search queries (how users may ask about this content)
+
+Rules:
+- Return only valid JSON
+- Keep everything in English
+- Do not invent facts outside the chunk
+
+Chunk:
+${chunkText}
+
+Return JSON:
+{
+  "summary": "",
+  "keywords": [],
+  "search_queries": []
+}`,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    console.error(`[chunk_metadata] LLM error (${response.status}): ${err}`);
+    return null;
+  }
+
+  try {
+    const data    = await response.json();
+    const content = data.choices?.[0]?.message?.content ?? "{}";
+    const parsed  = JSON.parse(content);
+    const summary  = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+    const keywords = Array.isArray(parsed.keywords) ? parsed.keywords.filter((k) => typeof k === "string") : [];
+    const search_queries = Array.isArray(parsed.search_queries) ? parsed.search_queries.filter((q) => typeof q === "string") : [];
+    console.log(`[chunk_metadata] summary="${summary.slice(0, 60)}…", ${keywords.length} keywords, ${search_queries.length} queries`);
+    return { summary, keywords, search_queries };
+  } catch (e) {
+    console.error("[chunk_metadata] Failed to parse LLM response:", e.message);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Query expansion via LLM.
+// Returns an expanded/clarified version of the user query plus keywords.
+// Used to enrich the search embedding for better retrieval of vague queries.
+// Skipped entirely when OPENAI_API_KEY is not set.
+// ---------------------------------------------------------------------------
+export async function generateSearchQueryMetadata(userQuery) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+
+  const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+  const model   = process.env.OPENAI_MODEL    || "gpt-4o-mini";
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method:  "POST",
+    headers: {
+      "Content-Type":  "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role:    "system",
+          content: "You are improving a user query for semantic search in a RAG system. Respond only with valid JSON.",
+        },
+        {
+          role:    "user",
+          content: `User query:
+${userQuery}
+
+Generate:
+1. expanded_query — a clearer, more complete version of the query
+2. keywords — important terms and synonyms (always in English)
+
+Rules:
+- Return only valid JSON
+- Keep the original meaning; do not answer the question
+- Do not invent unrelated topics
+
+Return JSON:
+{
+  "expanded_query": "",
+  "keywords": []
+}`,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    console.error(`[query_metadata] LLM error (${response.status}): ${err}`);
+    return null;
+  }
+
+  try {
+    const data    = await response.json();
+    const content = data.choices?.[0]?.message?.content ?? "{}";
+    const parsed  = JSON.parse(content);
+    const expanded_query = typeof parsed.expanded_query === "string" ? parsed.expanded_query.trim() : userQuery;
+    const keywords = Array.isArray(parsed.keywords) ? parsed.keywords.filter((k) => typeof k === "string") : [];
+    console.log(`[query_metadata] expanded="${expanded_query.slice(0, 80)}…", ${keywords.length} keywords`);
+    return { expanded_query, keywords };
+  } catch (e) {
+    console.error("[query_metadata] Failed to parse LLM response:", e.message);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Document-level metadata extraction via LLM (author + date).
 // Called only when the caller did not supply these fields explicitly AND
 // auto-extraction from file metadata came up empty.

@@ -16,10 +16,12 @@ import { embedTexts } from "../services/embeddings.service.js";
 import { qdrant, ensureCollection } from "../services/qdrant.service.js";
 import {
   generateMetaQuery,
+  generateChunkMetadata,
   extractDocumentMeta,
   extractText,
   streamToBuffer,
 } from "../services/document.service.js";
+import { buildEmbeddingText } from "../utils/text.utils.js";
 import { s3, GetObjectCommand } from "../services/s3.service.js";
 import { safeUnlink } from "../utils/file.utils.js";
 import { parsePdfDate } from "../utils/date.utils.js";
@@ -126,7 +128,32 @@ export async function ingestFile(req, res) {
 
     console.log(`[ingest] "${source}" (${fileType}, ${fileSize} bytes) → ${chunks.length} chunks`);
 
-    const denseEmbeddings = await embedTexts(chunks);
+    const metaQueryEnabled = !!process.env.OPENAI_API_KEY;
+
+    // Generate per-chunk metadata (summary, keywords, search_queries) for enriched embeddings.
+    let chunkMetadatas = chunks.map(() => null);
+    if (metaQueryEnabled) {
+      console.log(`[ingest] Generating chunk metadata for ${chunks.length} chunks…`);
+      chunkMetadatas = await runWithConcurrency(
+        chunks.map((text) => () => generateChunkMetadata(text)),
+        5
+      );
+      console.log(`[ingest] Chunk metadata done`);
+    }
+
+    // Build enriched embedding texts (keywords + summary + queries + content).
+    const embeddingTexts = chunks.map((text, i) => {
+      const meta = chunkMetadatas[i];
+      if (!meta) return text;
+      return buildEmbeddingText({
+        text,
+        summary:        meta.summary,
+        keywords:       meta.keywords,
+        search_queries: meta.search_queries,
+      });
+    });
+
+    const denseEmbeddings = await embedTexts(embeddingTexts);
 
     if (denseEmbeddings[0].length !== EXPECTED_DENSE_SIZE) {
       await safeUnlink(tempPath);
@@ -135,7 +162,7 @@ export async function ingestFile(req, res) {
       });
     }
 
-    const metaQueryEnabled = !!process.env.OPENAI_API_KEY;
+    // Generate financial topic tags (existing meta_query feature).
     let metaQueries = chunks.map(() => []);
     if (metaQueryEnabled) {
       console.log(`[ingest] Generating meta_query tags for ${chunks.length} chunks…`);
@@ -163,23 +190,29 @@ export async function ingestFile(req, res) {
     await ensureCollection(denseEmbeddings[0].length);
 
     const documentId = uuidv4();
-    const points = chunks.map((text, index) => ({
-      id:     uuidv4(),
-      vector: denseEmbeddings[index],
-      payload: {
-        document_id:       documentId,
-        source,
-        original_filename: originalFilename,
-        mime_type:         mimeType,
-        file_size:         fileSize,
-        type:              fileType,
-        chunk_index:       index,
-        text,
-        meta_query:        [...(metaQueries[index] ?? []), ...docTags],
-        embedding_model:   EMBEDDING_MODEL,
-        created_at:        new Date().toISOString(),
-      },
-    }));
+    const points = chunks.map((text, index) => {
+      const meta = chunkMetadatas[index];
+      return {
+        id:     uuidv4(),
+        vector: denseEmbeddings[index],
+        payload: {
+          document_id:       documentId,
+          source,
+          original_filename: originalFilename,
+          mime_type:         mimeType,
+          file_size:         fileSize,
+          type:              fileType,
+          chunk_index:       index,
+          text,
+          summary:           meta?.summary        ?? null,
+          keywords:          meta?.keywords        ?? [],
+          search_queries:    meta?.search_queries  ?? [],
+          meta_query:        [...(metaQueries[index] ?? []), ...docTags],
+          embedding_model:   EMBEDDING_MODEL,
+          created_at:        new Date().toISOString(),
+        },
+      };
+    });
 
     await qdrant.upsert(COLLECTION, { wait: true, points });
     await safeUnlink(tempPath);
@@ -264,13 +297,36 @@ export async function ingestFromS3(req, res) {
         if (!chunks.length) throw new Error("No chunks generated");
         console.log(`[ingest/s3] "${fileName}" → ${chunks.length} chunks`);
 
+        // 4. Chunk metadata + enriched embedding texts
+        const metaQueryEnabled = !!process.env.OPENAI_API_KEY;
+
+        let chunkMetadatas = chunks.map(() => null);
+        if (metaQueryEnabled) {
+          console.log(`[ingest/s3] Step 4a: Generating chunk metadata…`);
+          chunkMetadatas = await runWithConcurrency(
+            chunks.map((text) => () => generateChunkMetadata(text)),
+            5
+          );
+          console.log(`[ingest/s3] Step 4a: Chunk metadata done`);
+        }
+
+        const embeddingTexts = chunks.map((text, i) => {
+          const meta = chunkMetadatas[i];
+          if (!meta) return text;
+          return buildEmbeddingText({
+            text,
+            summary:        meta.summary,
+            keywords:       meta.keywords,
+            search_queries: meta.search_queries,
+          });
+        });
+
         // 4. Embed
         console.log(`[ingest/s3] Step 4: Embedding ${chunks.length} chunks…`);
-        const embeddings = await embedTexts(chunks);
+        const embeddings = await embedTexts(embeddingTexts);
         console.log(`[ingest/s3] Step 4: Embeddings done (dim=${embeddings[0].length})`);
 
         // 5. Meta-query tags + document metadata
-        const metaQueryEnabled = !!process.env.OPENAI_API_KEY;
         let metaQueries = chunks.map(() => []);
         if (metaQueryEnabled) {
           console.log(`[ingest/s3] Step 5: Generating meta-query tags…`);
@@ -303,22 +359,28 @@ export async function ingestFromS3(req, res) {
         // 7. Upsert
         console.log(`[ingest/s3] Step 7: Upserting to Qdrant…`);
         const documentId = uuidv4();
-        const points = chunks.map((text, i) => ({
-          id:     uuidv4(),
-          vector: embeddings[i],
-          payload: {
-            knowledgeBaseId,
-            fileKey:         key,
-            fileName,
-            document_id:     documentId,
-            source:          "s3",
-            chunk_index:     i,
-            text,
-            meta_query:      [...(metaQueries[i] ?? []), ...docTags],
-            embedding_model: EMBEDDING_MODEL,
-            created_at:      new Date().toISOString(),
-          },
-        }));
+        const points = chunks.map((text, i) => {
+          const meta = chunkMetadatas[i];
+          return {
+            id:     uuidv4(),
+            vector: embeddings[i],
+            payload: {
+              knowledgeBaseId,
+              fileKey:         key,
+              fileName,
+              document_id:     documentId,
+              source:          "s3",
+              chunk_index:     i,
+              text,
+              summary:         meta?.summary        ?? null,
+              keywords:        meta?.keywords        ?? [],
+              search_queries:  meta?.search_queries  ?? [],
+              meta_query:      [...(metaQueries[i] ?? []), ...docTags],
+              embedding_model: EMBEDDING_MODEL,
+              created_at:      new Date().toISOString(),
+            },
+          };
+        });
 
         await qdrant.upsert(COLLECTION, { wait: true, points });
         console.log(`[ingest/s3] Upserted ${points.length} vectors for "${fileName}"`);

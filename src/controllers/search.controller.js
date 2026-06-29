@@ -6,6 +6,8 @@ import {
 } from "../config/constants.js";
 import { embedTexts } from "../services/embeddings.service.js";
 import { qdrant } from "../services/qdrant.service.js";
+import { generateSearchQueryMetadata } from "../services/document.service.js";
+import { buildSearchEmbeddingText } from "../utils/text.utils.js";
 
 const PAYLOAD_FIELDS = ["text", "source", "chunk_index", "meta_query", "author", "document_date"];
 
@@ -26,7 +28,16 @@ export async function search(req, res) {
     const { query, tags, limit = 5, min_results = 2 } = req.body;
     if (!query) return res.status(400).json({ error: "Missing query" });
 
-    const [embedding] = await embedTexts([query]);
+    // Expand the query with synonyms and a clearer rephrasing for better retrieval.
+    const queryMeta = await generateSearchQueryMetadata(query);
+    const searchText = queryMeta
+      ? buildSearchEmbeddingText(query, queryMeta)
+      : query;
+    if (queryMeta) {
+      console.log(`[search] expanded query: "${queryMeta.expanded_query.slice(0, 80)}…"`);
+    }
+
+    const [embedding] = await embedTexts([searchText]);
 
     let results  = [];
     let usedTags = false;
@@ -88,7 +99,12 @@ export async function retrieve(req, res) {
     const { query } = req.body;
     if (!query) return res.status(400).json({ error: "Missing query" });
 
-    const [embedding] = await embedTexts([query]);
+    const queryMeta = await generateSearchQueryMetadata(query);
+    const searchText = queryMeta
+      ? buildSearchEmbeddingText(query, queryMeta)
+      : query;
+
+    const [embedding] = await embedTexts([searchText]);
 
     if (!embedding || embedding.length === 0) {
       return res.status(500).json({

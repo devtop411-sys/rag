@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 
-dotenv.config({ override: true });
-
-console.log(process.env.AWS_ACCESS_KEY_ID);
-console.log("test22312", process.env.AWS_SECRET_ACCESS_KEY?.length);
+const __dirname = dirname(fileURLToPath(import.meta.url));
+// Resolve .env from the project root regardless of the process CWD.
+dotenv.config({ path: join(__dirname, "../../.env"), override: true });

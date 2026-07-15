@@ -7,7 +7,8 @@
     "dev": "nodemon server.js",
     "start": "node src/server.js",
     "mcp": "node mcp.js",
-    "mcp:http": "node mcp-http.js"
+    "mcp:http": "node mcp-http.js",
+    "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1072.0",

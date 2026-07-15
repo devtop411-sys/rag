@@ -57,6 +57,82 @@ export function createMcpServer() {
 
 function registerTools(server) {
 // ---------------------------------------------------------------------------
+// Tool: hello  (connectivity check for Claude Custom Connectors)
+// ---------------------------------------------------------------------------
+server.tool(
+  "hello",
+  "Returns a test message confirming that the Collider MCP server is working.",
+  {
+    name: z.string().optional().describe("Optional name to greet"),
+  },
+  async ({ name }) => {
+    const who = name && name.trim() ? name.trim() : "Claude";
+    return {
+      content: [
+        { type: "text", text: `Hello, ${who}! Collider MCP server is working.` },
+      ],
+    };
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool: search_knowledge_base
+//
+// Thin wrapper over the existing RAG/Qdrant search pipeline (same embedding
+// model + collection used by the REST /search route). Returns plain text with
+// source attribution (fileName + document_id) when available.
+// ---------------------------------------------------------------------------
+server.tool(
+  "search_knowledge_base",
+  "Search the Collider knowledge base for information relevant to a user query.",
+  {
+    query: z.string().min(1).describe("The user query to search the knowledge base for"),
+  },
+  async ({ query }) => {
+    try {
+      const queryMeta = await generateSearchQueryMetadata(query);
+      const searchText = queryMeta
+        ? buildSearchEmbeddingText(query, queryMeta)
+        : query;
+
+      const [embedding] = await embedTexts([searchText]);
+
+      const hits = await qdrant.search(COLLECTION, {
+        vector: embedding,
+        limit: 5,
+        with_payload: ["text", "source", "chunk_index", "document_id"],
+      });
+
+      if (!hits.length) {
+        return {
+          content: [
+            { type: "text", text: "No relevant information found in the knowledge base." },
+          ],
+        };
+      }
+
+      const text = hits
+        .map((h, i) => {
+          const p = h.payload ?? {};
+          const lines = [`[${i + 1}] score: ${h.score.toFixed(4)}`];
+          if (p.source) lines.push(`fileName: ${p.source}`);
+          if (p.document_id) lines.push(`document_id: ${p.document_id}`);
+          lines.push("", p.text ?? "");
+          return lines.join("\n");
+        })
+        .join("\n\n---\n\n");
+
+      return { content: [{ type: "text", text }] };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Error searching knowledge base: ${err.message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // Tool: search
 // ---------------------------------------------------------------------------
 server.tool(

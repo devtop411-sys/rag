@@ -4,6 +4,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 
 import { createMcpServer } from "./server.js";
+import { mcpAuthGuard } from "./oauth.js";
 
 // ---------------------------------------------------------------------------
 // Streamable HTTP MCP transport, mounted on the EXISTING Express backend.
@@ -23,6 +24,47 @@ import { createMcpServer } from "./server.js";
 const transports = new Map(); // sessionId → StreamableHTTPServerTransport
 
 export const mcpRouter = Router();
+
+// ---------------------------------------------------------------------------
+// Accept-header compatibility shim.
+//
+// The MCP SDK requires the Accept header to literally list BOTH
+// `application/json` and `text/event-stream`. Some clients — notably the
+// Claude Custom Connectors broker — send `Accept: */*` (or omit it), which the
+// SDK would otherwise reject with 406 before initialize ever succeeds.
+//
+// We normalize it here (both the parsed header and rawHeaders, since the Node
+// transport rebuilds the request via @hono/node-server) so those clients can
+// connect. Scoped to /mcp only — it never touches other API routes.
+// ---------------------------------------------------------------------------
+function normalizeMcpAccept(req, _res, next) {
+  const desired = "application/json, text/event-stream";
+  const accept = req.headers["accept"] || "";
+  const compatible =
+    accept.includes("application/json") && accept.includes("text/event-stream");
+
+  if (!compatible) {
+    req.headers["accept"] = desired;
+    if (Array.isArray(req.rawHeaders)) {
+      let patched = false;
+      for (let i = 0; i < req.rawHeaders.length; i += 2) {
+        if (String(req.rawHeaders[i]).toLowerCase() === "accept") {
+          req.rawHeaders[i + 1] = desired;
+          patched = true;
+        }
+      }
+      if (!patched) req.rawHeaders.push("Accept", desired);
+    }
+  }
+  next();
+}
+
+mcpRouter.use("/mcp", normalizeMcpAccept);
+
+// Require a valid OAuth 2.1 bearer token for every /mcp method (POST/GET/DELETE).
+// Unauthenticated requests get a 401 + WWW-Authenticate pointing at the
+// Protected Resource Metadata, which is how Claude discovers the OAuth flow.
+mcpRouter.use("/mcp", mcpAuthGuard);
 
 mcpRouter.post("/mcp", async (req, res) => {
   try {

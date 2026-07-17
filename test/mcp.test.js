@@ -2,15 +2,18 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import app from "../src/app.js";
+import { issueAccessToken } from "../src/mcp/oauth.js";
 
 // ---------------------------------------------------------------------------
 // Integration tests for the Streamable HTTP MCP endpoint mounted on the main
-// Express backend. These exercise only the transport + connectivity tools
-// (hello / tools/list) and require no external services (Qdrant/Voyage).
+// Express backend. These exercise the transport + connectivity tools
+// (hello / tools/list), the OAuth 2.1 metadata endpoints, and the bearer-token
+// auth guard. They require no external services (Qdrant/Voyage/Google).
 // ---------------------------------------------------------------------------
 
 let server;
 let baseUrl;
+let accessToken;
 
 const POST_HEADERS = {
   "Content-Type": "application/json",
@@ -28,9 +31,10 @@ const INITIALIZE_BODY = {
   },
 };
 
-function postMcp(body, sessionId) {
+function postMcp(body, sessionId, token = accessToken) {
   const headers = { ...POST_HEADERS };
   if (sessionId) headers["mcp-session-id"] = sessionId;
+  if (token) headers["authorization"] = `Bearer ${token}`;
   return fetch(`${baseUrl}/mcp`, {
     method: "POST",
     headers,
@@ -56,6 +60,13 @@ before(async () => {
   });
   const { port } = server.address();
   baseUrl = `http://127.0.0.1:${port}`;
+  // Mint a token exactly as the /oauth/token endpoint would for this base URL.
+  accessToken = await issueAccessToken({
+    sub: "tester@collider.vc",
+    name: "Tester",
+    scope: "mcp",
+    baseUrl,
+  });
 });
 
 after(async () => {
@@ -75,6 +86,22 @@ test("initialize returns a session ID and server info", async () => {
   assert.ok(json.result, "expected a result object");
   assert.equal(json.result.serverInfo.name, "rag-knowledge-base");
   assert.ok(json.result.protocolVersion, "expected a negotiated protocol version");
+});
+
+test("initialize succeeds with Accept: */* (Claude connector compatibility)", async () => {
+  const res = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "*/*",
+      authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(INITIALIZE_BODY),
+  });
+  assert.equal(res.status, 200);
+  assert.ok(res.headers.get("mcp-session-id"), "expected a session ID");
+  const json = await res.json();
+  assert.equal(json.result.serverInfo.name, "rag-knowledge-base");
 });
 
 test("tools/list exposes the hello and search_knowledge_base tools", async () => {
@@ -127,7 +154,87 @@ test("a request with an invalid session ID is rejected with 400", async () => {
 test("GET /mcp without a session ID is rejected with 400", async () => {
   const res = await fetch(`${baseUrl}/mcp`, {
     method: "GET",
-    headers: { Accept: "text/event-stream" },
+    headers: {
+      Accept: "text/event-stream",
+      authorization: `Bearer ${accessToken}`,
+    },
   });
+  assert.equal(res.status, 400);
+});
+
+// ---------------------------------------------------------------------------
+// OAuth 2.1 auth guard + discovery
+// ---------------------------------------------------------------------------
+
+test("POST /mcp without a bearer token is rejected with 401 + WWW-Authenticate", async () => {
+  const res = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: POST_HEADERS,
+    body: JSON.stringify(INITIALIZE_BODY),
+  });
+  assert.equal(res.status, 401);
+  const header = res.headers.get("www-authenticate") || "";
+  assert.match(header, /Bearer/);
+  assert.match(header, /resource_metadata=/);
+  assert.match(header, /\/\.well-known\/oauth-protected-resource/);
+});
+
+test("POST /mcp with an invalid bearer token is rejected with 401", async () => {
+  const res = await postMcp(INITIALIZE_BODY, undefined, "not-a-real-token");
+  assert.equal(res.status, 401);
+  assert.match(res.headers.get("www-authenticate") || "", /error="invalid_token"/);
+});
+
+test("protected resource metadata advertises this server as its own auth server", async () => {
+  const res = await fetch(`${baseUrl}/.well-known/oauth-protected-resource`);
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.equal(json.resource, `${baseUrl}/mcp`);
+  assert.ok(Array.isArray(json.authorization_servers));
+  assert.ok(json.authorization_servers.includes(baseUrl));
+});
+
+test("authorization server metadata exposes PKCE + the OAuth endpoints", async () => {
+  const res = await fetch(`${baseUrl}/.well-known/oauth-authorization-server`);
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.equal(json.issuer, baseUrl);
+  assert.equal(json.authorization_endpoint, `${baseUrl}/oauth/authorize`);
+  assert.equal(json.token_endpoint, `${baseUrl}/oauth/token`);
+  assert.equal(json.registration_endpoint, `${baseUrl}/oauth/register`);
+  assert.ok(json.code_challenge_methods_supported.includes("S256"));
+});
+
+test("dynamic client registration rejects a disallowed redirect_uri", async () => {
+  const res = await fetch(`${baseUrl}/oauth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ redirect_uris: ["https://evil.example.com/callback"] }),
+  });
+  assert.equal(res.status, 400);
+  const json = await res.json();
+  assert.equal(json.error, "invalid_redirect_uri");
+});
+
+test("dynamic client registration accepts the Claude callback", async () => {
+  const res = await fetch(`${baseUrl}/oauth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
+      client_name: "Claude",
+    }),
+  });
+  assert.equal(res.status, 201);
+  const json = await res.json();
+  assert.ok(json.client_id, "expected a client_id");
+  assert.equal(json.token_endpoint_auth_method, "none");
+});
+
+test("authorize rejects a request without PKCE", async () => {
+  const url =
+    `${baseUrl}/oauth/authorize?response_type=code` +
+    `&client_id=abc&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}`;
+  const res = await fetch(url, { redirect: "manual" });
   assert.equal(res.status, 400);
 });

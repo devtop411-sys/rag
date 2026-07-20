@@ -66,14 +66,49 @@ const SIGNING_KEY = new TextEncoder().encode(signingSecret);
 //
 // Metadata and token audiences must be absolute URLs. Prefer PUBLIC_BASE_URL
 // (e.g. https://rag.collider.vc); otherwise derive from proxy headers.
+//
+// Behind TLS-terminating proxies (Cloudflare / ALB / nginx on :80) the
+// X-Forwarded-Proto header is often "http" even though clients reach us over
+// HTTPS. Claude refuses OAuth against http:// endpoints, so for any non-local
+// host we upgrade to https.
 // ---------------------------------------------------------------------------
 export function getBaseUrl(req) {
-  const configured = process.env.PUBLIC_BASE_URL;
-  if (configured) return configured.replace(/\/+$/, "");
-  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https")
+  const configured = (process.env.PUBLIC_BASE_URL || "").trim();
+  if (configured) {
+    // Even an explicit PUBLIC_BASE_URL must be https for public hosts —
+    // Claude refuses OAuth discovery over http://.
+    try {
+      const u = new URL(configured.replace(/\/+$/, ""));
+      const host = u.hostname.toLowerCase();
+      const isLocal =
+        host === "localhost" || host === "127.0.0.1" || host === "::1";
+      if (!isLocal && u.protocol === "http:") u.protocol = "https:";
+      return u.origin;
+    } catch {
+      return configured.replace(/\/+$/, "");
+    }
+  }
+
+  const host = String(
+    req.headers["x-forwarded-host"] || req.headers["host"] || "localhost",
+  )
     .split(",")[0]
     .trim();
-  const host = req.headers["x-forwarded-host"] || req.headers["host"];
+  const hostname = host.replace(/:\d+$/, "").toLowerCase();
+  const isLocal =
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname.endsWith(".local");
+
+  let proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+
+  // Public hosts must advertise https — otherwise Claude DCR fails.
+  if (!isLocal && proto !== "https") proto = "https";
+
   return `${proto}://${host}`;
 }
 

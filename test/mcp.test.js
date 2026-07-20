@@ -205,6 +205,21 @@ test("authorization server metadata exposes PKCE + the OAuth endpoints", async (
   assert.ok(json.code_challenge_methods_supported.includes("S256"));
 });
 
+test("metadata upgrades http → https for public Host headers (proxy safety)", async () => {
+  // Simulate a TLS-terminating proxy that forwards as plain http with a public Host.
+  const res = await fetch(`${baseUrl}/.well-known/oauth-authorization-server`, {
+    headers: {
+      Host: "rag.collider.vc",
+      "X-Forwarded-Proto": "http",
+      "X-Forwarded-Host": "rag.collider.vc",
+    },
+  });
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.equal(json.issuer, "https://rag.collider.vc");
+  assert.match(json.registration_endpoint, /^https:\/\//);
+});
+
 test("dynamic client registration rejects a disallowed redirect_uri", async () => {
   const res = await fetch(`${baseUrl}/oauth/register`, {
     method: "POST",

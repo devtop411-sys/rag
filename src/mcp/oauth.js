@@ -135,23 +135,55 @@ function isAllowedRedirect(uri) {
   if (ALLOWED_REDIRECTS.has(uri)) return true;
   try {
     const u = new URL(uri);
-    return u.hostname === "localhost" || u.hostname === "127.0.0.1";
+    // Claude Code uses http://localhost:<ephemeral>/callback (port varies).
+    if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
+      return u.pathname === "/callback" || u.pathname === "/";
+    }
+    return false;
   } catch {
     return false;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Authorization codes — short-lived, single-use, in memory.
+// Authorization codes — signed JWTs (stateless).
+//
+// Previously stored in memory, which breaks when /oauth/consent and
+// /oauth/token hit different processes (restarts, multiple containers).
+// A short-lived signed JWT carries the PKCE binding and user identity.
 // ---------------------------------------------------------------------------
-const AUTH_CODE_TTL_MS = 60_000;
-const authCodes = new Map(); // code → { email, name, picture, ...binding, exp }
+const AUTH_CODE_TTL = "2m";
+const usedAuthCodeJtis = new Map(); // jti → expiry ms (best-effort single-use)
 
-function pruneAuthCodes() {
+function pruneUsedAuthCodes() {
   const now = Date.now();
-  for (const [code, entry] of authCodes) {
-    if (entry.exp < now) authCodes.delete(code);
+  for (const [jti, exp] of usedAuthCodeJtis) {
+    if (exp < now) usedAuthCodeJtis.delete(jti);
   }
+}
+
+async function mintAuthCode(payload) {
+  return new SignJWT({ ...payload, token_type: "auth_code" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(AUTH_CODE_TTL)
+    .setJti(randomUUID())
+    .sign(SIGNING_KEY);
+}
+
+async function consumeAuthCode(code) {
+  const { payload } = await jwtVerify(code, SIGNING_KEY);
+  if (payload.token_type !== "auth_code") {
+    throw new Error("not an authorization code");
+  }
+  pruneUsedAuthCodes();
+  const jti = payload.jti;
+  if (!jti || usedAuthCodeJtis.has(jti)) {
+    throw new Error("authorization code already used");
+  }
+  // Mark used for slightly longer than the code TTL.
+  usedAuthCodeJtis.set(jti, Date.now() + 5 * 60_000);
+  return payload;
 }
 
 // ---------------------------------------------------------------------------
@@ -384,9 +416,7 @@ oauthRouter.post("/oauth/consent", express.json(), async (req, res) => {
     // Throws with .status 401/403 on invalid token / disallowed account.
     const user = await verifyGoogleCredential(credential);
 
-    pruneAuthCodes();
-    const code = randomBytes(32).toString("base64url");
-    authCodes.set(code, {
+    const code = await mintAuthCode({
       email: user.email,
       name: user.name,
       picture: user.picture,
@@ -395,16 +425,17 @@ oauthRouter.post("/oauth/consent", express.json(), async (req, res) => {
       code_challenge,
       resource: resource || resourceOf(getBaseUrl(req)),
       scope: scope || "mcp",
-      exp: Date.now() + AUTH_CODE_TTL_MS,
     });
 
     const url = new URL(redirect_uri);
     url.searchParams.set("code", code);
     if (state) url.searchParams.set("state", state);
 
+    console.log(`[MCP OAuth] authorized ${user.email} → redirect`);
     return res.json({ redirect_url: url.toString() });
   } catch (err) {
     const status = err.status ?? 500;
+    console.warn(`[MCP OAuth] consent failed: ${err.message}`);
     return res.status(status).json({
       error: status === 403 ? "access_denied" : "invalid_grant",
       error_description: err.message,
@@ -420,14 +451,15 @@ oauthRouter.post("/oauth/token", async (req, res) => {
   try {
     if (grantType === "authorization_code") {
       const { code, code_verifier, redirect_uri } = req.body;
-      pruneAuthCodes();
 
-      const entry = code ? authCodes.get(code) : null;
-      if (entry) authCodes.delete(code); // single-use
-
-      if (!entry || entry.exp < Date.now()) {
+      let entry;
+      try {
+        entry = await consumeAuthCode(code);
+      } catch (err) {
+        console.warn(`[MCP OAuth] token exchange: bad code — ${err.message}`);
         return tokenError(res, "invalid_grant", "authorization code invalid or expired");
       }
+
       if (entry.redirect_uri !== redirect_uri) {
         return tokenError(res, "invalid_grant", "redirect_uri mismatch");
       }
@@ -435,12 +467,13 @@ oauthRouter.post("/oauth/token", async (req, res) => {
         return tokenError(res, "invalid_grant", "PKCE verification failed");
       }
 
+      console.log(`[MCP OAuth] token issued for ${entry.email}`);
       return res.json(
         await buildTokenResponse({
           sub: entry.email,
           name: entry.name,
           picture: entry.picture,
-          scope: entry.scope,
+          scope: entry.scope || "mcp",
           baseUrl,
         }),
       );

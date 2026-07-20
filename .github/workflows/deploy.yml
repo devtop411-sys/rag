@@ -28,11 +28,13 @@ jobs:
           AWS_REGION:            ${{ secrets.AWS_REGION }}
           AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          PUBLIC_BASE_URL:       ${{ secrets.PUBLIC_BASE_URL }}
+          OAUTH_SIGNING_SECRET:  ${{ secrets.OAUTH_SIGNING_SECRET }}
         with:
           host:     ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key:      ${{ secrets.EC2_SSH_KEY }}
-          envs: VOYAGE_API_KEY,QDRANT_URL,QDRANT_API_KEY,API_KEY,SLACK_BOT_TOKEN,DIFY_API_KEY,GOOGLE_CLIENT_ID,VITE_GOOGLE_DRIVE_CLIENT_ID,OPENAI_API_KEY,S3_BUCKET,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY
+          envs: VOYAGE_API_KEY,QDRANT_URL,QDRANT_API_KEY,API_KEY,SLACK_BOT_TOKEN,DIFY_API_KEY,GOOGLE_CLIENT_ID,VITE_GOOGLE_DRIVE_CLIENT_ID,OPENAI_API_KEY,S3_BUCKET,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,PUBLIC_BASE_URL,OAUTH_SIGNING_SECRET
           script: |
             set -e
 
@@ -64,6 +66,8 @@ jobs:
             echo "AWS_REGION=${AWS_REGION:-us-east-1}"          >> .env
             echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"         >> .env
             echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> .env
+            echo "PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://rag.collider.vc}" >> .env
+            echo "OAUTH_SIGNING_SECRET=$OAUTH_SIGNING_SECRET"  >> .env
 
             # Restart Docker containers
             docker compose down || true

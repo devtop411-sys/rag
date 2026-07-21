@@ -322,7 +322,7 @@ oauthRouter.get("/.well-known/openid-configuration", authServerMetadata);
 oauthRouter.post("/oauth/register", (req, res) => {
   const body = req.body || {};
   const redirectUris = body.redirect_uris;
-
+  console.log("[MCP OAuth register]", JSON.stringify(req.body, null, 2));
   if (!Array.isArray(redirectUris) || redirectUris.length === 0) {
     return res.status(400).json({
       error: "invalid_client_metadata",

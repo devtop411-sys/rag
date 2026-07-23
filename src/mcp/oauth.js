@@ -11,38 +11,10 @@ import { SignJWT, jwtVerify } from "jose";
 import { verifyGoogleCredential } from "../services/auth.service.js";
 import { ALLOWED_DOMAIN } from "../config/constants.js";
 
-// ---------------------------------------------------------------------------
-// Self-hosted OAuth 2.1 authorization server for the remote MCP endpoint.
-//
-// This turns the Express backend into its own OAuth 2.1 Authorization Server so
-// claude.ai (and any spec-compliant MCP client) can authenticate users before
-// they reach /mcp. The actual "who are you" step is delegated to Google Sign-In
-// and restricted to @collider.vc + the allow-list (see auth.service.js), so
-// every external user logs in with their own identity.
-//
-// Flow (Authorization Code + PKCE, per the MCP authorization spec):
-//   1. Unauthenticated /mcp call     → 401 + WWW-Authenticate (see mcpAuthGuard)
-//   2. GET  /.well-known/oauth-protected-resource   → Protected Resource Meta
-//   3. GET  /.well-known/oauth-authorization-server → AS metadata
-//   4. POST /oauth/register          → Dynamic Client Registration (RFC 7591)
-//   5. GET  /oauth/authorize         → Google Sign-In page
-//   6. POST /oauth/consent           → verify Google creds, mint auth code
-//   7. POST /oauth/token             → PKCE check, issue JWT access/refresh
-//   8. /mcp with Bearer <jwt>        → verified per request
-//
-// Tokens are signed JWTs (HS256). No database is required: authorization codes
-// are short-lived and kept in memory; clients are validated statelessly via the
-// redirect-URI allow-list + PKCE, so nothing else needs to be persisted.
-// ---------------------------------------------------------------------------
-
 const ACCESS_TTL = Number(process.env.OAUTH_ACCESS_TTL || 3600); // seconds
 const REFRESH_TTL = Number(process.env.OAUTH_REFRESH_TTL || 60 * 60 * 24 * 30);
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 
-// Signing key. Prefer a stable secret from the environment so tokens survive
-// restarts and work across multiple instances. If none is set we generate an
-// ephemeral one — auth is STILL enforced (secure by default), but tokens are
-// invalidated on restart and won't validate across a multi-instance deploy.
 let signingSecret = process.env.OAUTH_SIGNING_SECRET;
 const EPHEMERAL_KEY = !signingSecret;
 if (EPHEMERAL_KEY) {
@@ -61,22 +33,9 @@ if (!GOOGLE_CLIENT_ID) {
 }
 const SIGNING_KEY = new TextEncoder().encode(signingSecret);
 
-// ---------------------------------------------------------------------------
-// Base URL / resource identity
-//
-// Metadata and token audiences must be absolute URLs. Prefer PUBLIC_BASE_URL
-// (e.g. https://rag.collider.vc); otherwise derive from proxy headers.
-//
-// Behind TLS-terminating proxies (Cloudflare / ALB / nginx on :80) the
-// X-Forwarded-Proto header is often "http" even though clients reach us over
-// HTTPS. Claude refuses OAuth against http:// endpoints, so for any non-local
-// host we upgrade to https.
-// ---------------------------------------------------------------------------
 export function getBaseUrl(req) {
   const configured = (process.env.PUBLIC_BASE_URL || "").trim();
   if (configured) {
-    // Even an explicit PUBLIC_BASE_URL must be https for public hosts —
-    // Claude refuses OAuth discovery over http://.
     try {
       const u = new URL(configured.replace(/\/+$/, ""));
       const host = u.hostname.toLowerCase();
@@ -106,7 +65,6 @@ export function getBaseUrl(req) {
     .trim()
     .toLowerCase();
 
-  // Public hosts must advertise https — otherwise Claude DCR fails.
   if (!isLocal && proto !== "https") proto = "https";
 
   return `${proto}://${host}`;
@@ -114,11 +72,6 @@ export function getBaseUrl(req) {
 
 const resourceOf = (baseUrl) => `${baseUrl}/mcp`;
 
-// ---------------------------------------------------------------------------
-// Redirect-URI allow-list. Prevents auth-code interception via open redirect.
-// claude.ai / claude.com callbacks are always allowed; localhost is allowed for
-// local testing (e.g. the MCP Inspector); extras via OAUTH_EXTRA_REDIRECT_URIS.
-// ---------------------------------------------------------------------------
 const ALLOWED_REDIRECTS = new Set([
   "https://claude.ai/api/mcp/auth_callback",
   "https://claude.com/api/mcp/auth_callback",
@@ -130,14 +83,36 @@ for (const uri of (process.env.OAUTH_EXTRA_REDIRECT_URIS || "")
   ALLOWED_REDIRECTS.add(uri);
 }
 
-function isAllowedRedirect(uri) {
+function isAllowedRedirect(uri, req) {
   if (!uri || typeof uri !== "string") return false;
   if (ALLOWED_REDIRECTS.has(uri)) return true;
   try {
     const u = new URL(uri);
-    // Claude Code uses http://localhost:<ephemeral>/callback (port varies).
     if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
-      return u.pathname === "/callback" || u.pathname === "/";
+      return true;
+    }
+    const allowedHosts = new Set();
+    const pub = (process.env.PUBLIC_BASE_URL || "").trim();
+    if (pub) {
+      try {
+        allowedHosts.add(new URL(pub).hostname);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (req) {
+      try {
+        allowedHosts.add(new URL(getBaseUrl(req)).hostname);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (allowedHosts.has(u.hostname)) {
+      return (
+        u.pathname === "/mcp-oauth-callback" ||
+        u.pathname === "/" ||
+        u.pathname === "/callback"
+      );
     }
     return false;
   } catch {
@@ -145,15 +120,8 @@ function isAllowedRedirect(uri) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Authorization codes — signed JWTs (stateless).
-//
-// Previously stored in memory, which breaks when /oauth/consent and
-// /oauth/token hit different processes (restarts, multiple containers).
-// A short-lived signed JWT carries the PKCE binding and user identity.
-// ---------------------------------------------------------------------------
 const AUTH_CODE_TTL = "2m";
-const usedAuthCodeJtis = new Map(); // jti → expiry ms (best-effort single-use)
+const usedAuthCodeJtis = new Map();
 
 function pruneUsedAuthCodes() {
   const now = Date.now();
@@ -162,8 +130,19 @@ function pruneUsedAuthCodes() {
   }
 }
 
-async function mintAuthCode(payload) {
-  return new SignJWT({ ...payload, token_type: "auth_code" })
+export async function mintAuthCode(payload) {
+  const { email, name, client_id, redirect_uri, code_challenge, resource, scope } =
+    payload;
+  return new SignJWT({
+    email,
+    name,
+    client_id,
+    redirect_uri,
+    code_challenge,
+    resource,
+    scope,
+    token_type: "auth_code",
+  })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(AUTH_CODE_TTL)
@@ -181,14 +160,10 @@ async function consumeAuthCode(code) {
   if (!jti || usedAuthCodeJtis.has(jti)) {
     throw new Error("authorization code already used");
   }
-  // Mark used for slightly longer than the code TTL.
   usedAuthCodeJtis.set(jti, Date.now() + 5 * 60_000);
   return payload;
 }
 
-// ---------------------------------------------------------------------------
-// PKCE (S256 only, as required by OAuth 2.1)
-// ---------------------------------------------------------------------------
 function verifyPkce(codeVerifier, codeChallenge) {
   if (!codeVerifier || !codeChallenge) return false;
   const computed = createHash("sha256").update(codeVerifier).digest("base64url");
@@ -197,9 +172,6 @@ function verifyPkce(codeVerifier, codeChallenge) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-// ---------------------------------------------------------------------------
-// Token issuing / verification
-// ---------------------------------------------------------------------------
 export async function issueAccessToken({ sub, name, picture, scope, baseUrl }) {
   return new SignJWT({ name, picture, scope, token_type: "access" })
     .setProtectedHeader({ alg: "HS256" })
@@ -248,14 +220,10 @@ async function buildTokenResponse({ sub, name, picture, scope, baseUrl }) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// /mcp bearer-token guard.
-//
-// On a missing/invalid token it returns 401 with a WWW-Authenticate header
-// pointing at the Protected Resource Metadata — the breadcrumb Claude follows
-// to start the OAuth flow.
-// ---------------------------------------------------------------------------
 export function mcpAuthGuard(req, res, next) {
+  // CORS preflight must not require a bearer token.
+  if (req.method === "OPTIONS") return next();
+
   const match = /^Bearer\s+(.+)$/i.exec(req.headers["authorization"] || "");
   if (!match) return sendChallenge(req, res);
 
@@ -279,13 +247,10 @@ function sendChallenge(req, res, error) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Router: metadata + OAuth endpoints
-// ---------------------------------------------------------------------------
-export const oauthRouter = Router();
-oauthRouter.use(express.urlencoded({ extended: true })); // token endpoint is form-encoded
 
-// --- Protected Resource Metadata (RFC 9728) ---
+export const oauthRouter = Router();
+oauthRouter.use(express.urlencoded({ extended: true }));
+
 function protectedResourceMetadata(req, res) {
   const base = getBaseUrl(req);
   res.json({
@@ -298,7 +263,7 @@ function protectedResourceMetadata(req, res) {
 oauthRouter.get("/.well-known/oauth-protected-resource", protectedResourceMetadata);
 oauthRouter.get("/.well-known/oauth-protected-resource/mcp", protectedResourceMetadata);
 
-// --- Authorization Server Metadata (RFC 8414) ---
+
 function authServerMetadata(req, res) {
   const base = getBaseUrl(req);
   res.json({
@@ -316,13 +281,10 @@ function authServerMetadata(req, res) {
 oauthRouter.get("/.well-known/oauth-authorization-server", authServerMetadata);
 oauthRouter.get("/.well-known/openid-configuration", authServerMetadata);
 
-// --- Dynamic Client Registration (RFC 7591) ---
-// Stateless: we issue an opaque client_id and rely on the redirect-URI
-// allow-list + PKCE for security, so registrations don't need to be persisted.
 oauthRouter.post("/oauth/register", (req, res) => {
   const body = req.body || {};
   const redirectUris = body.redirect_uris;
-  console.log("[MCP OAuth register]", JSON.stringify(req.body, null, 2));
+
   if (!Array.isArray(redirectUris) || redirectUris.length === 0) {
     return res.status(400).json({
       error: "invalid_client_metadata",
@@ -330,7 +292,7 @@ oauthRouter.post("/oauth/register", (req, res) => {
     });
   }
   for (const uri of redirectUris) {
-    if (!isAllowedRedirect(uri)) {
+    if (!isAllowedRedirect(uri, req)) {
       return res.status(400).json({
         error: "invalid_redirect_uri",
         error_description: `redirect_uri not allowed: ${uri}`,
@@ -350,7 +312,6 @@ oauthRouter.post("/oauth/register", (req, res) => {
   });
 });
 
-// --- Authorization endpoint: renders the Google Sign-In page ---
 oauthRouter.get("/oauth/authorize", (req, res) => {
   const {
     response_type,
@@ -366,7 +327,7 @@ oauthRouter.get("/oauth/authorize", (req, res) => {
   const errors = [];
   if (response_type !== "code") errors.push("response_type must be 'code'");
   if (!client_id) errors.push("client_id is required");
-  if (!isAllowedRedirect(String(redirect_uri || "")))
+  if (!isAllowedRedirect(String(redirect_uri || ""), req))
     errors.push("redirect_uri is missing or not allowed");
   if (!code_challenge) errors.push("code_challenge is required (PKCE)");
   if (code_challenge_method !== "S256")
@@ -389,7 +350,6 @@ oauthRouter.get("/oauth/authorize", (req, res) => {
   );
 });
 
-// --- Consent: verify the Google credential and mint an authorization code ---
 oauthRouter.post("/oauth/consent", express.json(), async (req, res) => {
   try {
     const {
@@ -406,20 +366,18 @@ oauthRouter.post("/oauth/consent", express.json(), async (req, res) => {
     if (!credential) {
       return res.status(400).json({ error: "invalid_request", error_description: "missing credential" });
     }
-    if (!isAllowedRedirect(redirect_uri)) {
+    if (!isAllowedRedirect(redirect_uri, req)) {
       return res.status(400).json({ error: "invalid_request", error_description: "redirect_uri not allowed" });
     }
     if (!code_challenge || code_challenge_method !== "S256") {
       return res.status(400).json({ error: "invalid_request", error_description: "PKCE (S256) required" });
     }
 
-    // Throws with .status 401/403 on invalid token / disallowed account.
     const user = await verifyGoogleCredential(credential);
 
     const code = await mintAuthCode({
       email: user.email,
       name: user.name,
-      picture: user.picture,
       client_id,
       redirect_uri,
       code_challenge,
@@ -443,7 +401,37 @@ oauthRouter.post("/oauth/consent", express.json(), async (req, res) => {
   }
 });
 
-// --- Token endpoint ---
+oauthRouter.post("/oauth/mcp-token", express.json(), async (req, res) => {
+  try {
+    const { credential } = req.body || {};
+    if (!credential) {
+      return res.status(400).json({
+        error: "invalid_request",
+        error_description: "credential is required",
+      });
+    }
+    const user = await verifyGoogleCredential(credential);
+    const baseUrl = getBaseUrl(req);
+    console.log(`[MCP OAuth] mcp-token issued for ${user.email}`);
+    return res.json(
+      await buildTokenResponse({
+        sub: user.email,
+        name: user.name,
+        picture: user.picture,
+        scope: "mcp",
+        baseUrl,
+      }),
+    );
+  } catch (err) {
+    const status = err.status ?? 500;
+    console.warn(`[MCP OAuth] mcp-token failed: ${err.message}`);
+    return res.status(status).json({
+      error: status === 403 ? "access_denied" : "invalid_grant",
+      error_description: err.message,
+    });
+  }
+});
+
 oauthRouter.post("/oauth/token", async (req, res) => {
   const baseUrl = getBaseUrl(req);
   const grantType = req.body?.grant_type;
@@ -461,9 +449,13 @@ oauthRouter.post("/oauth/token", async (req, res) => {
       }
 
       if (entry.redirect_uri !== redirect_uri) {
+        console.warn(
+          `[MCP OAuth] redirect_uri mismatch: stored=${entry.redirect_uri} got=${redirect_uri}`,
+        );
         return tokenError(res, "invalid_grant", "redirect_uri mismatch");
       }
       if (!verifyPkce(code_verifier, entry.code_challenge)) {
+        console.warn("[MCP OAuth] PKCE verification failed");
         return tokenError(res, "invalid_grant", "PKCE verification failed");
       }
 
@@ -472,7 +464,7 @@ oauthRouter.post("/oauth/token", async (req, res) => {
         await buildTokenResponse({
           sub: entry.email,
           name: entry.name,
-          picture: entry.picture,
+          picture: entry.picture || null,
           scope: entry.scope || "mcp",
           baseUrl,
         }),
@@ -511,12 +503,7 @@ function tokenError(res, error, error_description) {
   return res.status(400).json({ error, error_description });
 }
 
-// ---------------------------------------------------------------------------
-// HTML rendering (minimal, self-contained)
-// ---------------------------------------------------------------------------
 function renderAuthorizePage(params) {
-  // Values are injected only as a JSON blob consumed by JS (never interpolated
-  // into HTML/attributes), so there is no injection surface from query params.
   const paramsJson = JSON.stringify(params).replace(/</g, "\\u003c");
   const clientIdAttr = String(GOOGLE_CLIENT_ID).replace(/"/g, "&quot;");
 

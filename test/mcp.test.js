@@ -246,10 +246,47 @@ test("dynamic client registration accepts the Claude callback", async () => {
   assert.equal(json.token_endpoint_auth_method, "none");
 });
 
-test("authorize rejects a request without PKCE", async () => {
-  const url =
-    `${baseUrl}/oauth/authorize?response_type=code` +
-    `&client_id=abc&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}`;
-  const res = await fetch(url, { redirect: "manual" });
-  assert.equal(res.status, 400);
+test("authorization_code grant exchanges a PKCE-bound code for tokens", async () => {
+  const { createHash, randomBytes } = await import("node:crypto");
+  const { mintAuthCode } = await import("../src/mcp/oauth.js");
+
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const redirectUri = "http://127.0.0.1/callback";
+
+  const code = await mintAuthCode({
+    email: "tester@collider.vc",
+    name: "Tester",
+    client_id: "test-client",
+    redirect_uri: redirectUri,
+    code_challenge: challenge,
+    resource: `${baseUrl}/mcp`,
+    scope: "mcp",
+  });
+
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    code_verifier: verifier,
+    redirect_uri: redirectUri,
+    client_id: "test-client",
+  });
+
+  const res = await fetch(`${baseUrl}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.equal(json.token_type, "Bearer");
+  assert.ok(json.access_token);
+  assert.ok(json.refresh_token);
+
+  const replay = await fetch(`${baseUrl}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  assert.equal(replay.status, 400);
 });

@@ -11,6 +11,7 @@ import searchRoutes    from "./routes/search.routes.js";
 import documentsRoutes from "./routes/documents.routes.js";
 import s3Routes        from "./routes/s3.routes.js";
 import slackRoutes     from "./routes/slack.routes.js";
+import firefliesRoutes from "./routes/fireflies.routes.js";
 import { mcpRouter }   from "./mcp/streamableHttp.js";
 import { oauthRouter } from "./mcp/oauth.js";
 
@@ -42,6 +43,7 @@ app.use(searchRoutes);
 app.use(documentsRoutes);
 app.use(s3Routes);
 app.use(slackRoutes);
+app.use(firefliesRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

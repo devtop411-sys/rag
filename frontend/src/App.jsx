@@ -3,6 +3,7 @@ import { GoogleOAuthProvider } from "@react-oauth/google";
 import LoginPage  from "./LoginPage.jsx";
 import UploadPage from "./UploadPage.jsx";
 import S3Page     from "./S3Page.jsx";
+import FirefliesPage from "./FirefliesPage.jsx";
 import McpPlaygroundPage from "./McpPlaygroundPage.jsx";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
@@ -63,6 +64,12 @@ export default function App() {
           Quick Upload
         </button>
         <button
+          className={`nav-tab ${page === "fireflies" ? "nav-tab--active" : ""}`}
+          onClick={() => setPage("fireflies")}
+        >
+          Fireflies
+        </button>
+        <button
           className={`nav-tab ${page === "mcp" ? "nav-tab--active" : ""}`}
           onClick={() => setPage("mcp")}
         >
@@ -80,6 +87,7 @@ export default function App() {
 
       {page === "s3" && <S3Page />}
       {page === "upload" && <UploadPage />}
+      {page === "fireflies" && <FirefliesPage />}
       {page === "mcp" && <McpPlaygroundPage />}
     </GoogleOAuthProvider>
   );

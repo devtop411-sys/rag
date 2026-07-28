@@ -78,8 +78,19 @@ export const META_QUERY_TAGS = [
 
 export const META_QUERY_TAG_SET = new Set(META_QUERY_TAGS);
 
-// ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
+export const FIREFLIES_GQL_URL = "https://api.fireflies.ai/graphql";
+
+export const FIREFLIES_STATE_COLLECTION =
+  process.env.FIREFLIES_STATE_COLLECTION || "fireflies_state";
+
+export const FIREFLIES_API_KEY = process.env.FIREFLIES_API_KEY || "";
+
+export const FIREFLIES_DEFAULT_SETTINGS = {
+  enabled:              false,
+  frequency_minutes:    60,
+  only_external:        true,
+  min_duration_minutes: 5,
+};
+
 export const ALLOWED_DOMAIN  = "collider.vc";
 export const ALLOWED_EMAILS  = new Set(["devtop411@gmail.com"]);

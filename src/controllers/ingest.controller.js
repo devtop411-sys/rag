@@ -45,10 +45,19 @@ async function isAlreadyIngested(filterKey, filterValue) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Shared helper: chunk raw text using RecursiveCharacterTextSplitter.
-// Markdown files are pre-split on header boundaries first.
-// ---------------------------------------------------------------------------
+
+async function deleteExistingChunks(filterKey, filterValue) {
+  try {
+    await qdrant.delete(COLLECTION, {
+      wait: true,
+      filter: { must: [{ key: filterKey, match: { value: filterValue } }] },
+    });
+  } catch (err) {
+    const is404 = err.message === "Not Found" || err.$metadata?.httpStatusCode === 404;
+    if (!is404) console.error("[ingest] delete existing chunks failed:", err.message);
+  }
+}
+
 async function chunkText(rawText, chunkSize, chunkOverlap) {
   const splitter = new RecursiveCharacterTextSplitter({ chunkSize, chunkOverlap });
   const looksLikeMarkdown = /^#{1,3} /m.test(rawText);
@@ -68,9 +77,6 @@ async function chunkText(rawText, chunkSize, chunkOverlap) {
   return splitter.splitText(rawText);
 }
 
-// ---------------------------------------------------------------------------
-// POST /ingest — parse, chunk, embed (Voyage AI), upsert unnamed default vectors
-// ---------------------------------------------------------------------------
 export async function ingestFile(req, res) {
   const tempPath = req.file?.path;
   console.log("filereq", req.file);
@@ -88,13 +94,7 @@ export async function ingestFile(req, res) {
 
     const originalFilename = req.file.originalname;
 
-    if (await isAlreadyIngested("original_filename", originalFilename)) {
-      await safeUnlink(tempPath);
-      return res.status(409).json({
-        error: `File "${originalFilename}" has already been ingested.`,
-        already_ingested: true,
-      });
-    }
+    const wasIngested = await isAlreadyIngested("original_filename", originalFilename);
 
     const source           = req.body.source || req.file.originalname;
     const chunkSize        = parseInt(req.body.chunkSize)    || 1200;
@@ -214,11 +214,12 @@ export async function ingestFile(req, res) {
       };
     });
 
+    await deleteExistingChunks("original_filename", originalFilename);
     await qdrant.upsert(COLLECTION, { wait: true, points });
     await safeUnlink(tempPath);
 
     console.log(
-      `[ingest] Upserted ${points.length} points (${EXPECTED_DENSE_SIZE}-dim Voyage AI) into "${COLLECTION}"`
+      `[ingest] ${wasIngested ? "Updated" : "Upserted"} ${points.length} points (${EXPECTED_DENSE_SIZE}-dim Voyage AI) into "${COLLECTION}"`
     );
 
     res.json({
@@ -226,6 +227,7 @@ export async function ingestFile(req, res) {
       document_id:       documentId,
       source,
       chunks:            chunks.length,
+      updated:           wasIngested,
       meta_query_tagged: metaQueryEnabled,
       embedding_model:   EMBEDDING_MODEL,
       vector_size:       EXPECTED_DENSE_SIZE,
@@ -237,10 +239,7 @@ export async function ingestFile(req, res) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// POST /api/ingest/s3 — download from S3, chunk, embed, upsert to Qdrant
-// Body:  { files: [{ key, author?, date? }], knowledgeBaseId? }
-// ---------------------------------------------------------------------------
+
 export async function ingestFromS3(req, res) {
   try {
     if (!S3_BUCKET) return res.status(500).json({ error: "S3_BUCKET not configured" });
@@ -262,12 +261,7 @@ export async function ingestFromS3(req, res) {
         const callerDate =
           typeof fileDate === "string" && fileDate.trim() ? fileDate.trim() : null;
 
-        // 0. Skip if already ingested
-        if (await isAlreadyIngested("fileKey", key)) {
-          console.log(`[ingest/s3] Skipping "${key}" — already ingested`);
-          results.push({ key, status: "skipped", reason: "already ingested" });
-          continue;
-        }
+        const wasIngested = await isAlreadyIngested("fileKey", key);
 
         // 1. Download from S3
         console.log(`[ingest/s3] Step 1: Downloading "${key}" from S3…`);
@@ -382,10 +376,13 @@ export async function ingestFromS3(req, res) {
           };
         });
 
+        await deleteExistingChunks("fileKey", key);
         await qdrant.upsert(COLLECTION, { wait: true, points });
-        console.log(`[ingest/s3] Upserted ${points.length} vectors for "${fileName}"`);
+        console.log(
+          `[ingest/s3] ${wasIngested ? "Updated" : "Upserted"} ${points.length} vectors for "${fileName}"`
+        );
 
-        results.push({ key, status: "ingested", chunks: chunks.length });
+        results.push({ key, status: "ingested", updated: wasIngested, chunks: chunks.length });
       } catch (err) {
         console.error(`[ingest/s3] Failed "${key}":`, {
           message:    err.message,

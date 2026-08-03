@@ -18,7 +18,7 @@ function formatDate(value) {
 
 const DEFAULT_SETTINGS = {
   enabled:              false,
-  frequency_minutes:    60,
+  frequency_minutes:    360,
   only_external:        true,
   min_duration_minutes: 5,
 };

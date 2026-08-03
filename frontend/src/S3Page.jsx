@@ -70,14 +70,18 @@ export default function S3Page() {
       if (!res.ok) throw new Error(data.error ?? "Upload failed");
 
       const resultMap = Object.fromEntries(data.files.map((r) => [r.fileName, r]));
+      const overwrittenKeys = new Set(
+        data.files.filter((r) => r.updated && r.key).map((r) => r.key)
+      );
       setFiles((prev) =>
-        prev.map((f) => {
-          if (f.status !== "uploading") return f;
-          const r = resultMap[f.fileName];
-          if (!r)            return { ...f, status: "failed",    error: "No result from server" };
-          if (r.duplicate)   return { ...f, status: "duplicate", error: "Already exists in S3" };
-          return { ...f, key: r.key, status: "uploaded" };
-        }),
+        prev
+          .filter((f) => f.status === "uploading" || !overwrittenKeys.has(f.key))
+          .map((f) => {
+            if (f.status !== "uploading") return f;
+            const r = resultMap[f.fileName];
+            if (!r) return { ...f, status: "failed", error: "No result from server" };
+            return { ...f, key: r.key, status: "uploaded" };
+          }),
       );
     } catch (err) {
       setFiles((prev) =>

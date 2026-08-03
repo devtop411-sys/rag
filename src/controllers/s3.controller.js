@@ -22,11 +22,13 @@ export async function uploadToS3(req, res) {
     const listData = await s3.send(
       new ListObjectsV2Command({ Bucket: S3_BUCKET, Prefix: S3_PREFIX })
     );
-    const existingNames = new Set(
-      (listData.Contents ?? []).map((obj) =>
-        obj.Key.replace(S3_PREFIX, "").replace(/^[0-9a-f-]+-/, "")
-      )
-    );
+
+    const existingKeyByName = new Map();
+    for (const obj of listData.Contents ?? []) {
+      if (obj.Key === S3_PREFIX) continue;
+      const name = obj.Key.replace(S3_PREFIX, "").replace(/^[0-9a-f-]+-/, "");
+      if (!existingKeyByName.has(name)) existingKeyByName.set(name, obj.Key);
+    }
 
     const results = await Promise.all(
       req.files.map(async (file) => {
@@ -36,15 +38,13 @@ export async function uploadToS3(req, res) {
         }
         const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
 
-        if (existingNames.has(safe)) {
-          console.log(`[s3/upload] Skipped duplicate "${file.originalname}"`);
-          return { fileName: file.originalname, key: null, duplicate: true };
-        }
-
-        const key = `${S3_PREFIX}${uuidv4()}-${safe}`;
+        const existingKey = existingKeyByName.get(safe);
+        const key = existingKey || `${S3_PREFIX}${uuidv4()}-${safe}`;
         await s3.send(new PutObjectCommand({ Bucket: S3_BUCKET, Key: key, Body: file.buffer }));
-        console.log(`[s3/upload] Uploaded "${file.originalname}" → ${key}`);
-        return { fileName: file.originalname, key };
+        console.log(
+          `[s3/upload] ${existingKey ? "Overwrote" : "Uploaded"} "${file.originalname}" → ${key}`
+        );
+        return { fileName: file.originalname, key, updated: !!existingKey };
       })
     );
 

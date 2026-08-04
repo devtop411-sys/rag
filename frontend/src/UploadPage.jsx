@@ -117,14 +117,11 @@ export default function UploadPage() {
   }
 
   return (
-    <div className="page">
-      <header className="header">
-        <div className="header__logo">⚡</div>
-        <h1 className="header__title">RAG Ingest</h1>
-        <StatusBadge status={status} />
-      </header>
+    <main className="main">
+        <div className="page-actions">
+          <StatusBadge status={status} />
+        </div>
 
-      <main className="main">
         <form className="card" onSubmit={handleSubmit}>
           <h2 className="card__title">Upload to Qdrant</h2>
           <p className="card__subtitle">
@@ -226,7 +223,6 @@ export default function UploadPage() {
             <strong>Error:</strong> {errorMsg}
           </div>
         )}
-      </main>
-    </div>
+    </main>
   );
 }

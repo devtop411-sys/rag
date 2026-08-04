@@ -106,11 +106,16 @@ export async function slackEvents(req, res) {
 
     if (!difyResponse.ok) {
       const errText = await difyResponse.text();
-      console.error("DIFY ERROR:", difyResponse.status, errText);
+      console.error("DIFY ERROR:", difyResponse.status, "url:", difyUrl, "keySet:", Boolean(process.env.DIFY_API_KEY), "body:", errText);
+      let reason = "";
+      try {
+        const errJson = JSON.parse(errText);
+        reason = errJson.message || errJson.code || "";
+      } catch { /* Dify returned a non-JSON body */ }
       await slack.chat.postMessage({
         channel:   event.channel,
         thread_ts: event.ts,
-        text:      `Sorry, I couldn't reach the knowledge base (Dify ${difyResponse.status}).`,
+        text:      `Sorry, I couldn't reach the knowledge base (Dify ${difyResponse.status}${reason ? `: ${reason}` : ""}).`,
       });
       return;
     }

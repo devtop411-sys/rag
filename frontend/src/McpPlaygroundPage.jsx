@@ -153,7 +153,7 @@ export default function McpPlaygroundPage() {
     if (err) {
       setPhase("error");
       setError(`Authorization failed — ${params.get("error_description") || err}`);
-      window.history.replaceState({}, "", "/");
+      window.history.replaceState({}, "", "/playground");
       return;
     }
     if (!code || !state) return;
@@ -164,12 +164,12 @@ export default function McpPlaygroundPage() {
     const pending = peekPkcePending();
     if (!pending || pending.state !== state) {
       if (loadMcpAuth()?.access_token) {
-        window.history.replaceState({}, "", "/");
+        window.history.replaceState({}, "", "/playground");
         return;
       }
       setPhase("error");
       setError("OAuth state mismatch — click Connect again.");
-      window.history.replaceState({}, "", "/");
+      window.history.replaceState({}, "", "/playground");
       return;
     }
 
@@ -194,13 +194,13 @@ export default function McpPlaygroundPage() {
         setAuth(next);
         setMcpUrl(pending.mcpUrl);
         setPhase("disconnected");
-        window.history.replaceState({}, "", "/");
+        window.history.replaceState({}, "", "/playground");
         await runHandshake(next);
       } catch (e) {
         setPhase("error");
         setError(e.message || String(e));
         setErrorDetail(String(e.stack || ""));
-        window.history.replaceState({}, "", "/");
+        window.history.replaceState({}, "", "/playground");
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps

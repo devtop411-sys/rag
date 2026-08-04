@@ -191,13 +191,7 @@ export default function FirefliesPage() {
   const connected = conn?.connected;
 
   return (
-    <div className="page">
-      <header className="header">
-        <div className="header__logo">🔥</div>
-        <h1 className="header__title">Fireflies</h1>
-      </header>
-
-      <main className="main">
+    <main className="main">
         {error && (
           <div className="result result--error" style={{ maxWidth: 700 }}>
             <span className="result__icon">❌</span>
@@ -420,7 +414,6 @@ export default function FirefliesPage() {
             </div>
           </>
         )}
-      </main>
-    </div>
+    </main>
   );
 }

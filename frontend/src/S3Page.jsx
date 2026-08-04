@@ -158,13 +158,7 @@ export default function S3Page() {
   const allChecked = selectable.length > 0 && selected.size === selectable.length;
 
   return (
-    <div className="page">
-      <header className="header">
-        <div className="header__logo">⚡</div>
-        <h1 className="header__title">File Manager</h1>
-      </header>
-
-      <main className="main">
+    <main className="main">
         <div className="fm-toolbar">
           <button className="btn btn--primary" onClick={() => inputRef.current.click()}>
             Upload files
@@ -253,7 +247,6 @@ export default function S3Page() {
             </table>
           )}
         </div>
-      </main>
-    </div>
+    </main>
   );
 }

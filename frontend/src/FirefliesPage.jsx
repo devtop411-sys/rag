@@ -31,6 +31,10 @@ export default function FirefliesPage() {
   const [meetings, setMeetings]   = useState([]);
   const [selected, setSelected]   = useState(new Set());
   const [search, setSearch]       = useState("");
+  const [page, setPage]           = useState(1);
+  const [hasMore, setHasMore]     = useState(false);
+
+  const PAGE_SIZE = 20;
 
   const [busy, setBusy]           = useState("");
   const [error, setError]         = useState("");
@@ -91,15 +95,22 @@ export default function FirefliesPage() {
     }
   }
 
-  async function loadMeetings(force = false) {
+  async function loadMeetings(force = false, pageArg = page) {
     setBusy("meetings");
     setError("");
     try {
-      const url  = `${API_BASE}/api/fireflies/meetings?search=${encodeURIComponent(search)}${force ? "&refresh=1" : ""}`;
-      const res  = await fetch(url, { headers: authHeaders });
+      const params = new URLSearchParams({
+        search,
+        page:  String(pageArg),
+        limit: String(PAGE_SIZE),
+      });
+      if (force) params.set("refresh", "1");
+      const res  = await fetch(`${API_BASE}/api/fireflies/meetings?${params}`, { headers: authHeaders });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load meetings");
       setMeetings(data.meetings ?? []);
+      setHasMore(Boolean(data.hasMore));
+      setPage(data.page ?? pageArg);
       setSelected(new Set());
       setNotice(data.warning ?? "");
     } catch (err) {
@@ -107,6 +118,11 @@ export default function FirefliesPage() {
     } finally {
       setBusy("");
     }
+  }
+
+  function goToPage(next) {
+    if (next < 1) return;
+    loadMeetings(false, next);
   }
 
   async function ingestIds(ids) {
@@ -326,10 +342,10 @@ export default function FirefliesPage() {
                 placeholder="Search meetings…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && loadMeetings(true)}
+                onKeyDown={(e) => e.key === "Enter" && loadMeetings(true, 1)}
                 style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #ccc", minWidth: 220 }}
               />
-              <button className="btn btn--ghost btn--sm" onClick={() => loadMeetings(true)} disabled={busy === "meetings"}>
+              <button className="btn btn--ghost btn--sm" onClick={() => loadMeetings(true, 1)} disabled={busy === "meetings"}>
                 {busy === "meetings" ? "Loading…" : "Search"}
               </button>
               <button
@@ -411,6 +427,24 @@ export default function FirefliesPage() {
                   </tbody>
                 </table>
               )}
+            </div>
+
+            <div className="fm-pagination">
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={() => goToPage(page - 1)}
+                disabled={page <= 1 || busy === "meetings"}
+              >
+                ← Prev
+              </button>
+              <span className="fm-page-info">Page {page}</span>
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={() => goToPage(page + 1)}
+                disabled={!hasMore || busy === "meetings"}
+              >
+                Next →
+              </button>
             </div>
           </>
         )}

@@ -5,7 +5,7 @@ import { runSync } from "../services/fireflies.sync.js";
 
 
 const MEETINGS_CACHE_TTL = 60 * 1000; // 60s
-let meetingsCache = { at: 0, data: null };
+const meetingsCache = new Map(); // key: `${skip}:${limit}` -> { at, data }
 
 function publicConnection(conn) {
   return {
@@ -81,29 +81,36 @@ export async function meetings(req, res) {
     if (!apiKey) return res.status(400).json({ error: "Not connected to Fireflies" });
 
     const search = (req.query.search || "").toString().trim().toLowerCase();
-    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const skip = (page - 1) * limit;
     const force = req.query.refresh === "1";
 
+    const cacheKey = `${skip}:${limit}`;
     let list;
     let warning = null;
-    const cacheFresh =
-      meetingsCache.data && Date.now() - meetingsCache.at < MEETINGS_CACHE_TTL;
+    const cached = meetingsCache.get(cacheKey);
+    const cacheFresh = cached && Date.now() - cached.at < MEETINGS_CACHE_TTL;
 
     if (!force && cacheFresh) {
-      list = meetingsCache.data;
+      list = cached.data;
     } else {
       try {
-        list = await listTranscripts(apiKey, { limit });
-        meetingsCache = { at: Date.now(), data: list };
+        list = await listTranscripts(apiKey, { limit, skip });
+        meetingsCache.set(cacheKey, { at: Date.now(), data: list });
       } catch (err) {
-        if (meetingsCache.data) {
-          list = meetingsCache.data;
+        if (cached) {
+          list = cached.data;
           warning = `Showing cached meetings — ${err.message}`;
         } else {
           throw err;
         }
       }
     }
+
+    // A full page implies there may be another one. Search filters the current
+    // page only (the Fireflies API has no server-side title search).
+    const hasMore = list.length === limit;
 
     let filtered = list;
     if (search) {
@@ -117,7 +124,7 @@ export async function meetings(req, res) {
       })
     );
 
-    res.json({ meetings: withState, warning });
+    res.json({ meetings: withState, page, limit, hasMore, warning });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

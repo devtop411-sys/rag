@@ -6,54 +6,60 @@ const VOYAGE_URL = "https://api.voyageai.com/v1/embeddings";
 const MAX_RPM = Number(process.env.VOYAGE_MAX_RPM) || 3;
 const MAX_TPM = Number(process.env.VOYAGE_MAX_TPM) || 10_000;
 
-const REQUEST_TOKEN_BUDGET = Math.max(1000, Math.floor(MAX_TPM * 0.9));
+const EFFECTIVE_TPM = Math.max(1000, Math.floor(MAX_TPM * 0.85));
+const REQUEST_TOKEN_BUDGET = EFFECTIVE_TPM; // max tokens per single request
 const MAX_TEXTS_PER_REQUEST = 128; // Voyage batch cap
-const MAX_RETRIES = 6;
+const MAX_RETRIES = 8;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-
+// Rough token estimate (Voyage ≈ 4 chars/token; dividing by 3.5 over-counts
+// slightly so we stay conservatively below the real limit).
 function estimateTokens(text) {
   return Math.max(1, Math.ceil((text?.length || 0) / 3.5));
 }
 
 
-const recent = [];
+let chain = Promise.resolve();
+let lastStartAt = 0;
 
-async function acquire(tokens) {
-  for (;;) {
-    const now = Date.now();
-    while (recent.length && recent[0].at <= now - 60_000) recent.shift();
-
-    const tokenSum = recent.reduce((s, e) => s + e.tokens, 0);
-    const rpmOk = recent.length < MAX_RPM;
-
-    const tpmOk = tokenSum + Math.min(tokens, MAX_TPM) <= MAX_TPM;
-
-    if (rpmOk && tpmOk) {
-      recent.push({ at: now, tokens });
-      return;
-    }
-
-    const oldest = recent[0]?.at ?? now;
-    const waitMs = Math.max(250, oldest + 60_000 - now + 50);
-    await sleep(waitMs);
-  }
+function schedule(tokens) {
+  const run = chain.then(async () => {
+    const rpmGap = 60_000 / MAX_RPM;
+    const tpmGap = (Math.min(tokens, EFFECTIVE_TPM) / EFFECTIVE_TPM) * 60_000;
+    const gap = Math.max(rpmGap, tpmGap);
+    const wait = lastStartAt + gap - Date.now();
+    if (wait > 0) await sleep(wait);
+    lastStartAt = Date.now();
+  });
+  chain = run.catch(() => {}); // keep the chain alive regardless of outcome
+  return run;
 }
 
 async function embedBatch(texts, estTokens) {
   let attempt = 0;
   for (;;) {
-    await acquire(estTokens);
+    // Every attempt (initial + retries) passes through the spacing gate.
+    await schedule(estTokens);
 
-    const response = await fetch(VOYAGE_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.VOYAGE_API_KEY}`,
-      },
-      body: JSON.stringify({ model: EMBEDDING_MODEL, input: texts }),
-    });
+    let response;
+    try {
+      response = await fetch(VOYAGE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.VOYAGE_API_KEY}`,
+        },
+        body: JSON.stringify({ model: EMBEDDING_MODEL, input: texts }),
+      });
+    } catch (err) {
+      if (attempt < MAX_RETRIES) {
+        attempt += 1;
+        console.warn(`[voyage] network error — retry ${attempt}/${MAX_RETRIES}: ${err.message}`);
+        continue;
+      }
+      throw err;
+    }
 
     if (response.ok) {
       const data = await response.json();
@@ -65,18 +71,13 @@ async function embedBatch(texts, estTokens) {
 
     const errText = await response.text();
 
-    // Retry on rate limit (429) and transient server errors (5xx).
     if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
       attempt += 1;
       const retryAfter = Number(response.headers.get("retry-after"));
-      const backoff =
-        Number.isFinite(retryAfter) && retryAfter > 0
-          ? retryAfter * 1000
-          : Math.min(60_000, 1000 * 2 ** attempt);
+      if (Number.isFinite(retryAfter) && retryAfter > 0) await sleep(retryAfter * 1000);
       console.warn(
-        `[voyage] ${response.status} rate-limited — retry ${attempt}/${MAX_RETRIES} in ${Math.round(backoff / 1000)}s`,
+        `[voyage] ${response.status} rate-limited — retry ${attempt}/${MAX_RETRIES} (auto-spaced ~${Math.round(60 / MAX_RPM)}s)`,
       );
-      await sleep(backoff);
       continue;
     }
 

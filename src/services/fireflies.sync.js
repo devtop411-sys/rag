@@ -2,6 +2,8 @@ import { getConnection, saveConnection, getApiKey } from "./fireflies.state.js";
 import { listTranscripts } from "./fireflies.service.js";
 import { ingestMeeting, getMeetingIngestState } from "./fireflies.ingest.js";
 
+const MAX_INGESTS_PER_RUN = Number(process.env.FIREFLIES_MAX_INGESTS_PER_RUN) || 5;
+
 function domainOf(email) {
   const at = String(email || "").split("@")[1];
   return at ? at.toLowerCase() : "";
@@ -43,18 +45,35 @@ export async function runSync({ force = false } = {}) {
 
   const meetings = await listTranscripts(apiKey, { limit: 50 });
 
-  const candidates = meetings.filter((m) => {
-    if (cursorMs != null && m.date != null && m.date <= cursorMs) return false;
-    return passesFilters(m, settings);
-  });
+  const candidates = meetings
+    .filter((m) => {
+      if (cursorMs != null && m.date != null && m.date <= cursorMs) return false;
+      return passesFilters(m, settings);
+    })
+    .sort((a, b) => (a.date || 0) - (b.date || 0));
 
   const results = [];
   let ingested = 0;
+  let deferred = 0;
   let maxDate = cursorMs || 0;
-  let earliestFailedDate = null;
+
+  let earliestPendingDate = null;
+  const holdCursor = (m) => {
+    if (m.date != null && (earliestPendingDate == null || m.date < earliestPendingDate)) {
+      earliestPendingDate = m.date;
+    }
+  };
 
   for (const m of candidates) {
     if (m.date && m.date > maxDate) maxDate = m.date;
+
+    if (ingested >= MAX_INGESTS_PER_RUN) {
+      deferred += 1;
+      holdCursor(m);
+      results.push({ id: m.id, title: m.title, status: "deferred" });
+      continue;
+    }
+
     try {
       const state = await getMeetingIngestState(m.id);
       if (state.ingested) {
@@ -65,43 +84,67 @@ export async function runSync({ force = false } = {}) {
       ingested += 1;
       results.push({ id: m.id, title: m.title, status: "ingested", chunks: r.chunks });
     } catch (err) {
-      if (m.date != null && (earliestFailedDate == null || m.date < earliestFailedDate)) {
-        earliestFailedDate = m.date;
+      if (err.permanent) {
+        results.push({ id: m.id, title: m.title, status: "skipped", reason: err.message });
+        continue;
       }
+      holdCursor(m);
       results.push({ id: m.id, title: m.title, status: "failed", error: err.message });
     }
   }
 
   let nextCursorMs = Math.max(maxDate, Date.now());
-  if (earliestFailedDate != null) {
-    nextCursorMs = Math.min(nextCursorMs, earliestFailedDate - 1);
+  if (earliestPendingDate != null) {
+    nextCursorMs = Math.min(nextCursorMs, earliestPendingDate - 1);
   }
+  if (cursorMs != null) nextCursorMs = Math.max(nextCursorMs, cursorMs); // never rewind
   const nextCursor = new Date(nextCursorMs).toISOString();
   await saveConnection({ last_synced_at: nextCursor });
 
-  console.log(`[fireflies] Sync complete — ingested ${ingested}/${candidates.length}`);
-  return { ok: true, ingested, checked: candidates.length, results, last_synced_at: nextCursor };
+  const failed = results.filter((r) => r.status === "failed").length;
+  console.log(
+    `[fireflies] Sync complete — ingested ${ingested}, deferred ${deferred}, failed ${failed}, of ${candidates.length} candidate(s)`
+  );
+  return {
+    ok: true,
+    ingested,
+    deferred,
+    failed,
+    checked: candidates.length,
+    results,
+    last_synced_at: nextCursor,
+  };
 }
 
 let timer = null;
-let lastAutoRun = 0;
+let nextRunAt = 0;
+let running = false;
+
+const BACKLOG_RETRY_MS = 5 * 60 * 1000;
 
 export function startScheduler() {
   if (timer) return;
 
   const TICK_MS = 60 * 1000;
   timer = setInterval(async () => {
+    if (running || Date.now() < nextRunAt) return;
+
     try {
       const conn = await getConnection();
       if (!conn.auto_sync?.enabled || conn.status !== "connected") return;
 
       const freqMs = (conn.auto_sync.frequency_minutes || 60) * 60 * 1000;
-      if (Date.now() - lastAutoRun < freqMs) return;
+      running = true;
+      nextRunAt = Date.now() + freqMs;
 
-      lastAutoRun = Date.now();
-      await runSync();
+      const result = await runSync();
+      if (result?.ok && (result.deferred > 0 || result.failed > 0)) {
+        nextRunAt = Date.now() + Math.min(BACKLOG_RETRY_MS, freqMs);
+      }
     } catch (err) {
       console.error("[fireflies] scheduled sync error:", err.message);
+    } finally {
+      running = false;
     }
   }, TICK_MS);
 

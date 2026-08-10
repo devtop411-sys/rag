@@ -55,7 +55,9 @@ export async function ingestMeeting(apiKey, meetingId) {
 
   const chunks = transcriptToChunks(transcript.sentences);
   if (!chunks.length) {
-    throw new Error("Transcript has no sentences to ingest");
+    const err = new Error("Transcript has no sentences to ingest");
+    err.permanent = true;
+    throw err;
   }
 
   const summaryText =

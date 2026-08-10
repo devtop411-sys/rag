@@ -159,11 +159,39 @@ export default function FirefliesPage() {
       const res  = await fetch(`${API_BASE}/api/fireflies/sync`, { method: "POST", headers: jsonHeaders });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Sync failed");
-      setNotice(data.initialized
-        ? "Sync baseline set — new meetings from now on will auto-ingest."
-        : `Sync complete — ingested ${data.ingested ?? 0} meeting(s).`);
+
+      setNotice(data.already_running ? "A sync is already running…" : "Sync started…");
+
+      let summary = "Sync finished.";
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 3000));
+
+        const s = await fetch(`${API_BASE}/api/fireflies/sync`, { headers: jsonHeaders });
+        const { sync } = await s.json();
+        if (!sync) break;
+
+        if (sync.running) {
+          const p = sync.progress;
+          setNotice(p?.current
+            ? `Syncing — ingesting “${p.current}” (${p.done ?? 0}/${p.total ?? "?"}` +
+              (p.pending != null ? `, ${p.pending} pending` : "") + ")…"
+            : "Syncing…");
+          continue;
+        }
+
+        if (sync.error) throw new Error(sync.error);
+        const r = sync.result ?? {};
+        summary = r.initialized
+          ? "Sync baseline set — new meetings from now on will auto-ingest."
+          : `Sync complete — ingested ${r.ingested ?? 0} meeting(s)` +
+            (r.deferred ? `, ${r.deferred} queued for the next run` : "") +
+            (r.failed ? `, ${r.failed} failed` : "") + ".";
+        break;
+      }
+
       await loadStatus();
-      await loadMeetings();
+      await loadMeetings(true);
+      setNotice(summary);
     } catch (err) {
       setError(err.message);
     } finally {

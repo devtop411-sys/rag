@@ -10,6 +10,7 @@ import {
   getSettings,
   updateSettings,
   sync,
+  syncStatus,
 } from "../controllers/fireflies.controller.js";
 
 const router = Router();
@@ -23,5 +24,6 @@ router.post("/api/fireflies/ingest",      requireApiKey, ingest);
 router.get("/api/fireflies/settings",     requireApiKey, getSettings);
 router.put("/api/fireflies/settings",     requireApiKey, updateSettings);
 router.post("/api/fireflies/sync",        requireApiKey, sync);
+router.get("/api/fireflies/sync",         requireApiKey, syncStatus);
 
 export default router;

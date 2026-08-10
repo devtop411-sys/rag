@@ -1,7 +1,7 @@
 import { getConnection, saveConnection, getApiKey } from "../services/fireflies.state.js";
 import { testConnection, listTranscripts } from "../services/fireflies.service.js";
 import { ingestMeeting, getMeetingIngestState } from "../services/fireflies.ingest.js";
-import { runSync } from "../services/fireflies.sync.js";
+import { startSync, getSyncState } from "../services/fireflies.sync.js";
 
 
 const MEETINGS_CACHE_TTL = 60 * 1000; // 60s
@@ -21,7 +21,7 @@ function publicConnection(conn) {
 export async function status(req, res) {
   try {
     const conn = await getConnection();
-    res.json(publicConnection(conn));
+    res.json({ ...publicConnection(conn), sync: getSyncState() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -184,9 +184,22 @@ export async function updateSettings(req, res) {
 
 export async function sync(req, res) {
   try {
-    const result = await runSync({ force: true });
-    if (!result.ok) return res.status(400).json(result);
-    res.json(result);
+    const conn = await getConnection();
+    const apiKey = await getApiKey();
+    if (!apiKey || conn.status !== "connected") {
+      return res.status(400).json({ ok: false, reason: "not_connected" });
+    }
+
+    const { started, already_running } = startSync({ force: true });
+    res.status(202).json({ ok: true, started, already_running, sync: getSyncState() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+export async function syncStatus(req, res) {
+  try {
+    res.json({ sync: getSyncState() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

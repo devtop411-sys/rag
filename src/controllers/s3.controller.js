@@ -8,8 +8,9 @@ import {
   ListObjectsV2Command,
   DeleteObjectCommand,
 } from "../services/s3.service.js";
-import { qdrant } from "../services/qdrant.service.js";
+import { qdrant, getIngestState } from "../services/qdrant.service.js";
 import { COLLECTION, ALLOWED_S3_EXTENSIONS } from "../config/constants.js";
+import { runWithConcurrency } from "../utils/concurrency.utils.js";
 
 // POST /api/s3/upload — upload files through the backend to S3
 export async function uploadToS3(req, res) {
@@ -73,7 +74,14 @@ export async function listS3Files(req, res) {
         lastModified: obj.LastModified,
       }));
 
-    res.json({ files });
+    // Attach live ingest state so the UI survives a refresh instead of
+    // assuming every listed file is un-ingested.
+    const withState = await runWithConcurrency(
+      files.map((f) => async () => ({ ...f, ...(await getIngestState("fileKey", f.key)) })),
+      8
+    );
+
+    res.json({ files: withState });
   } catch (error) {
     console.error("[s3/files] error:", error);
     res.status(500).json({ error: error.message });

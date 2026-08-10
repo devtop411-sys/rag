@@ -5,13 +5,15 @@ const API_KEY     = import.meta.env.VITE_API_KEY ?? "";
 const authHeaders = API_KEY ? { "x-api-key": API_KEY } : {};
 
 const STATUS_LABEL = {
-  uploaded:  { label: "Uploaded",   cls: "badge--idle" },
-  uploading: { label: "Uploading…", cls: "badge--loading" },
-  ingesting: { label: "Ingesting…", cls: "badge--loading" },
-  ingested:  { label: "Ingested",   cls: "badge--success" },
-  failed:    { label: "Failed",     cls: "badge--error" },
-  duplicate: { label: "Duplicate",  cls: "badge--error" },
+  not_ingested: { label: "Not ingested", cls: "badge--idle" },
+  uploading:    { label: "Uploading…",   cls: "badge--loading" },
+  ingesting:    { label: "Ingesting…",   cls: "badge--loading" },
+  ingested:     { label: "Ingested",     cls: "badge--success" },
+  failed:       { label: "Failed",       cls: "badge--error" },
+  duplicate:    { label: "Duplicate",    cls: "badge--error" },
 };
+
+const SELECTABLE = new Set(["not_ingested", "ingested", "failed"]);
 
 function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
@@ -35,7 +37,12 @@ export default function S3Page() {
       const res  = await fetch(`${API_BASE}/api/s3/files`, { headers: authHeaders });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load files");
-      setFiles(data.files.map((f) => ({ ...f, status: "uploaded" })));
+      setFiles(
+        data.files.map((f) => ({
+          ...f,
+          status: f.ingested ? "ingested" : "not_ingested",
+        }))
+      );
     } catch (err) {
       setError(err.message);
     } finally {
@@ -80,7 +87,8 @@ export default function S3Page() {
             if (f.status !== "uploading") return f;
             const r = resultMap[f.fileName];
             if (!r) return { ...f, status: "failed", error: "No result from server" };
-            return { ...f, key: r.key, status: "uploaded" };
+            // A re-uploaded file needs re-ingesting even if old vectors linger.
+            return { ...f, key: r.key, status: "not_ingested", ingested: false, chunks: 0 };
           }),
       );
     } catch (err) {
@@ -114,7 +122,14 @@ export default function S3Page() {
         prev.map((f) => {
           const r = resultMap[f.key];
           if (!r) return f;
-          return { ...f, status: (r.status === "ingested" || r.status === "skipped") ? "ingested" : "failed", error: r.error };
+          const ok = r.status === "ingested" || r.status === "skipped";
+          return {
+            ...f,
+            status:   ok ? "ingested" : "failed",
+            ingested: ok,
+            chunks:   ok ? (r.chunks ?? f.chunks) : f.chunks,
+            error:    r.error,
+          };
         }),
       );
     } catch (err) {
@@ -146,7 +161,7 @@ export default function S3Page() {
   }
 
   function toggleAll() {
-    const selectable = files.filter((f) => f.status === "uploaded" || f.status === "ingested").map((f) => f.key);
+    const selectable = files.filter((f) => SELECTABLE.has(f.status)).map((f) => f.key);
     if (selected.size === selectable.length) {
       setSelected(new Set());
     } else {
@@ -154,8 +169,9 @@ export default function S3Page() {
     }
   }
 
-  const selectable = files.filter((f) => f.status === "uploaded" || f.status === "ingested");
-  const allChecked = selectable.length > 0 && selected.size === selectable.length;
+  const selectable    = files.filter((f) => SELECTABLE.has(f.status));
+  const allChecked    = selectable.length > 0 && selected.size === selectable.length;
+  const ingestedCount = files.filter((f) => f.status === "ingested").length;
 
   return (
     <main className="main">
@@ -174,6 +190,11 @@ export default function S3Page() {
           <button className="btn btn--ghost btn--sm" onClick={loadFiles} disabled={loading}>
             {loading ? "Loading…" : "Refresh"}
           </button>
+          {files.length > 0 && (
+            <span className="fm-page-info">
+              {ingestedCount} of {files.length} ingested
+            </span>
+          )}
         </div>
 
         {error && (
@@ -209,8 +230,8 @@ export default function S3Page() {
               </thead>
               <tbody>
                 {files.map((f) => {
-                  const st = STATUS_LABEL[f.status] ?? STATUS_LABEL.uploaded;
-                  const canSelect = f.status === "uploaded" || f.status === "ingested";
+                  const st = STATUS_LABEL[f.status] ?? STATUS_LABEL.not_ingested;
+                  const canSelect = SELECTABLE.has(f.status);
                   return (
                     <tr key={f.key} className={selected.has(f.key) ? "fm-row--selected" : ""}>
                       <td>
@@ -228,7 +249,10 @@ export default function S3Page() {
                         {f.lastModified ? new Date(f.lastModified).toLocaleDateString() : "—"}
                       </td>
                       <td>
-                        <span className={`badge ${st.cls}`}>{st.label}</span>
+                        <span className={`badge ${st.cls}`}>
+                          {st.label}
+                          {f.status === "ingested" && f.chunks ? ` · ${f.chunks} chunks` : ""}
+                        </span>
                         {f.error && <span className="fm-error-tip" title={f.error}> ⚠</span>}
                       </td>
                       <td>

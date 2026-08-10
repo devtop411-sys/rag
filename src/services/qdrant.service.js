@@ -8,6 +8,27 @@ export const qdrant = new QdrantClient({
 });
 
 /**
+ * Reports whether any points exist for a payload field/value pair, plus how
+ * many. A missing collection counts as "not ingested".
+ *
+ * @param {string} field
+ * @param {string} value
+ * @returns {Promise<{ ingested: boolean, chunks: number }>}
+ */
+export async function getIngestState(field, value) {
+  try {
+    const res = await qdrant.count(COLLECTION, {
+      filter: { must: [{ key: field, match: { value } }] },
+      exact: true,
+    });
+    const count = res?.count ?? 0;
+    return { ingested: count > 0, chunks: count };
+  } catch {
+    return { ingested: false, chunks: 0 };
+  }
+}
+
+/**
  * Ensures the Qdrant collection exists with an unnamed default vector of
  * `denseSize` dimensions (Cosine distance).
  *

@@ -17,5 +17,6 @@ export async function runWithConcurrency(tasks, limit) {
   }
 
   await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, runNext));
+  await Promise.all(executing);
   return results;
 }

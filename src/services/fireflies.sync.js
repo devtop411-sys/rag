@@ -173,14 +173,15 @@ export async function runSync({ force = false } = {}) {
 
   const failed = results.filter((r) => r.status === "failed").length;
   console.log(
-    `[fireflies] Sync complete — ingested ${ingested}, deferred ${deferred}, failed ${failed}, of ${candidates.length} candidate(s)`
+    `[fireflies] Sync complete — ingested ${ingested}, deferred ${deferred}, failed ${failed}, pending ${pending.length}, after-cursor ${afterCursor.length}`
   );
   return {
     ok: true,
     ingested,
     deferred,
     failed,
-    checked: candidates.length,
+    checked: afterCursor.length,
+    pending: pending.length,
     results,
     last_synced_at: nextCursor,
   };
@@ -189,29 +190,47 @@ export async function runSync({ force = false } = {}) {
 let timer = null;
 let nextRunAt = 0;
 
+
 const BACKLOG_RETRY_MS = 5 * 60 * 1000;
+const STARTUP_DELAY_MS = 5 * 1000;
+
+async function tickScheduler() {
+  if (runState.running || Date.now() < nextRunAt) return;
+
+  try {
+    const conn = await getConnection();
+    if (!conn.auto_sync?.enabled || conn.status !== "connected") return;
+
+    const freqMs = (conn.auto_sync.frequency_minutes || 60) * 60 * 1000;
+    nextRunAt = Date.now() + freqMs;
+
+    const result = await startSync().promise;
+    const hasBacklog =
+      result?.ok && ((result.deferred ?? 0) > 0 || (result.failed ?? 0) > 0);
+    if (hasBacklog || !result?.ok) {
+      nextRunAt = Date.now() + Math.min(BACKLOG_RETRY_MS, freqMs);
+    }
+  } catch (err) {
+    console.error("[fireflies] scheduled sync error:", err.message);
+    nextRunAt = Date.now() + BACKLOG_RETRY_MS;
+  }
+}
 
 export function startScheduler() {
   if (timer) return;
 
   const TICK_MS = 60 * 1000;
-  timer = setInterval(async () => {
-    if (runState.running || Date.now() < nextRunAt) return;
+  nextRunAt = Date.now() + STARTUP_DELAY_MS;
+  setTimeout(() => {
+    tickScheduler().catch((err) =>
+      console.error("[fireflies] startup sync error:", err.message)
+    );
+  }, STARTUP_DELAY_MS);
 
-    try {
-      const conn = await getConnection();
-      if (!conn.auto_sync?.enabled || conn.status !== "connected") return;
-
-      const freqMs = (conn.auto_sync.frequency_minutes || 60) * 60 * 1000;
-      nextRunAt = Date.now() + freqMs;
-
-      const result = await startSync().promise;
-      if (result?.ok && (result.deferred > 0 || result.failed > 0)) {
-        nextRunAt = Date.now() + Math.min(BACKLOG_RETRY_MS, freqMs);
-      }
-    } catch (err) {
-      console.error("[fireflies] scheduled sync error:", err.message);
-    }
+  timer = setInterval(() => {
+    tickScheduler().catch((err) =>
+      console.error("[fireflies] scheduled sync error:", err.message)
+    );
   }, TICK_MS);
 
   if (typeof timer.unref === "function") timer.unref();

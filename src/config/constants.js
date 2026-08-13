@@ -87,7 +87,7 @@ export const FIREFLIES_API_KEY = process.env.FIREFLIES_API_KEY || "";
 
 export const FIREFLIES_DEFAULT_SETTINGS = {
   enabled:              false,
-  frequency_minutes:    360,
+  frequency_minutes:    60,
   only_external:        true,
   min_duration_minutes: 5,
 };

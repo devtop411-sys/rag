@@ -5,12 +5,14 @@ import LoginPage  from "./LoginPage.jsx";
 import UploadPage from "./UploadPage.jsx";
 import S3Page     from "./S3Page.jsx";
 import FirefliesPage from "./FirefliesPage.jsx";
+import DrivePage  from "./DrivePage.jsx";
 import McpPlaygroundPage from "./McpPlaygroundPage.jsx";
 import {
   BurgerIcon,
   FolderIcon,
   UploadIcon,
   SparkIcon,
+  DriveIcon,
   PuzzleIcon,
   LogoutIcon,
 } from "./icons/index.jsx";
@@ -20,6 +22,7 @@ const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
 const NAV_ITEMS = [
   { to: "/files",      label: "File Manager",   icon: FolderIcon },
   { to: "/upload",     label: "Quick Upload",   icon: UploadIcon },
+  { to: "/drive",      label: "Google Drive",   icon: DriveIcon },
   { to: "/fireflies",  label: "Fireflies",      icon: SparkIcon },
   { to: "/playground", label: "MCP Playground", icon: PuzzleIcon },
 ];
@@ -124,6 +127,7 @@ export default function App() {
               <Route path="/" element={<Navigate to="/files" replace />} />
               <Route path="/files" element={<S3Page />} />
               <Route path="/upload" element={<UploadPage />} />
+              <Route path="/drive" element={<DrivePage />} />
               <Route path="/fireflies" element={<FirefliesPage />} />
               <Route path="/playground" element={<McpPlaygroundPage />} />
               <Route path="/mcp-oauth-callback" element={<McpPlaygroundPage />} />

@@ -28,6 +28,7 @@ export async function extractText(buffer, ext) {
     }
     case ".txt":
     case ".md":
+    case ".csv":
       return buffer.toString("utf8");
     default:
       throw new Error(`Unsupported file type "${ext}"`);

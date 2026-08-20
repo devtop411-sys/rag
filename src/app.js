@@ -12,6 +12,7 @@ import documentsRoutes from "./routes/documents.routes.js";
 import s3Routes        from "./routes/s3.routes.js";
 import slackRoutes     from "./routes/slack.routes.js";
 import firefliesRoutes from "./routes/fireflies.routes.js";
+import driveRoutes     from "./routes/drive.routes.js";
 import { mcpRouter }   from "./mcp/streamableHttp.js";
 import { oauthRouter } from "./mcp/oauth.js";
 
@@ -25,6 +26,8 @@ app.use(
       "Content-Type",
       "Authorization",
       "Accept",
+      "x-api-key",
+      "x-google-access-token",
       "mcp-session-id",
       "Mcp-Session-Id",
     ],
@@ -44,6 +47,7 @@ app.use(documentsRoutes);
 app.use(s3Routes);
 app.use(slackRoutes);
 app.use(firefliesRoutes);
+app.use(driveRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

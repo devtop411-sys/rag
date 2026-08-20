@@ -653,6 +653,37 @@ input[type="number"]::-webkit-inner-spin-button { opacity: 0.4; }
 
 .fm-meta { color: #64748b; white-space: nowrap; }
 
+.fm-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.fm-breadcrumb__sep {
+  margin: 0 4px;
+  color: #475569;
+}
+
+.fm-breadcrumb button,
+.fm-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: #818cf8;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.fm-breadcrumb button:hover,
+.fm-link:hover {
+  text-decoration: underline;
+  color: #a5b4fc;
+}
+
 /* ---- Pagination ---- */
 .fm-pagination {
   display: flex;

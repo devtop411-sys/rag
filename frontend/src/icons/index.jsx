@@ -40,6 +40,16 @@ export function PuzzleIcon() {
   );
 }
 
+export function DriveIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 20h12a2 2 0 0 0 2-2v-3H4v3a2 2 0 0 0 2 2z" />
+      <path d="M4 15 8.5 6h7L20 15" />
+      <path d="M9.5 15h5" />
+    </svg>
+  );
+}
+
 export function LogoutIcon() {
   return (
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

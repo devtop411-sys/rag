@@ -20,6 +20,13 @@ import {
   getDriveFileMeta,
 } from "./googleDrive.service.js";
 
+
+function permanentError(message) {
+  const err = new Error(message);
+  err.permanent = true;
+  return err;
+}
+
 async function chunkText(rawText, chunkSize, chunkOverlap) {
   const splitter = new RecursiveCharacterTextSplitter({ chunkSize, chunkOverlap });
   const looksLikeMarkdown = /^#{1,3} /m.test(rawText);
@@ -55,13 +62,38 @@ export function getDriveIngestState(driveFileId) {
   return getIngestState("driveFileId", driveFileId);
 }
 
+/**
+ * Like getDriveIngestState, but also returns the Drive modifiedTime recorded at
+ * ingest time so callers can tell whether the file changed since.
+ *
+ * @returns {Promise<{ ingested: boolean, modifiedTime: string | null }>}
+ */
+export async function getDriveIngestedMeta(driveFileId) {
+  try {
+    const res = await qdrant.scroll(COLLECTION, {
+      filter: { must: [{ key: "driveFileId", match: { value: driveFileId } }] },
+      limit: 1,
+      with_payload: ["drive_modified_time"],
+      with_vector: false,
+    });
+    const point = res?.points?.[0];
+    if (!point) return { ingested: false, modifiedTime: null };
+    return {
+      ingested: true,
+      modifiedTime: point.payload?.drive_modified_time ?? null,
+    };
+  } catch {
+    return { ingested: false, modifiedTime: null };
+  }
+}
+
 export async function ingestDriveFile(accessToken, fileId) {
   const meta = await getDriveFileMeta(accessToken, fileId);
   if (meta.mimeType === FOLDER_MIME) {
-    throw new Error("Folders cannot be ingested — open the folder and pick files");
+    throw permanentError("Folders cannot be ingested — open the folder and pick files");
   }
   if (!isIngestible(meta.mimeType)) {
-    throw new Error(`Unsupported file type "${meta.mimeType}"`);
+    throw permanentError(`Unsupported file type "${meta.mimeType}"`);
   }
 
   const wasIngested = (await getDriveIngestState(meta.id)).ingested;
@@ -71,17 +103,21 @@ export async function ingestDriveFile(accessToken, fileId) {
 
   let rawText;
   let pdfAuthor = null;
-  if (ext === ".pdf") {
-    const parsed = await pdfParse(buffer);
-    rawText = parsed.text;
-    pdfAuthor = parsed.info?.Author?.trim() || null;
-  } else {
-    rawText = await extractText(buffer, ext);
+  try {
+    if (ext === ".pdf") {
+      const parsed = await pdfParse(buffer);
+      rawText = parsed.text;
+      pdfAuthor = parsed.info?.Author?.trim() || null;
+    } else {
+      rawText = await extractText(buffer, ext);
+    }
+  } catch (err) {
+    throw permanentError(`Could not read file contents: ${err.message}`);
   }
-  if (!rawText?.trim()) throw new Error("No text extracted from file");
+  if (!rawText?.trim()) throw permanentError("No text extracted from file");
 
   const chunks = await chunkText(rawText, 800, 150);
-  if (!chunks.length) throw new Error("No chunks generated");
+  if (!chunks.length) throw permanentError("No chunks generated");
   console.log(`[drive] "${fileName}" → ${chunks.length} chunks`);
 
   const metaQueryEnabled = !!process.env.OPENAI_API_KEY;
@@ -147,6 +183,7 @@ export async function ingestDriveFile(accessToken, fileId) {
         original_filename: fileName,
         mime_type:         meta.mimeType,
         webViewLink:       meta.webViewLink ?? null,
+        drive_modified_time: meta.modifiedTime ?? null,
         chunk_index:       i,
         text,
         summary:           chunkMeta?.summary       ?? null,

@@ -92,5 +92,16 @@ export const FIREFLIES_DEFAULT_SETTINGS = {
   min_duration_minutes: 5,
 };
 
+export const DRIVE_STATE_COLLECTION =
+  process.env.DRIVE_STATE_COLLECTION || "google_drive_state";
+
+export const DRIVE_DEFAULT_SETTINGS = {
+  enabled:           false,
+  frequency_minutes: 60,
+  reingest_modified: true,
+};
+
+export const DRIVE_DEFAULT_WATCH_FOLDER = { id: "root", name: "My Drive" };
+
 export const ALLOWED_DOMAIN  = "collider.vc";
 export const ALLOWED_EMAILS  = new Set(["devtop411@gmail.com"]);

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { GoogleOAuthProvider, useGoogleLogin } from "@react-oauth/google";
 
 const API_BASE    = import.meta.env.VITE_API_URL ?? "";
@@ -9,9 +9,21 @@ const DRIVE_CLIENT_ID =
   "";
 
 const authHeaders = API_KEY ? { "x-api-key": API_KEY } : {};
-const TOKEN_KEY   = "collider_drive_token";
-const EXP_KEY     = "collider_drive_exp";
-const ACCOUNT_KEY = "collider_drive_account";
+const jsonHeaders = { "Content-Type": "application/json", ...authHeaders };
+
+const TOKEN_KEY = "collider_drive_token";
+const EXP_KEY   = "collider_drive_exp";
+
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+
+
+const RENEW_LEAD_MS = 5 * 60 * 1000;
+
+const DEFAULT_SETTINGS = {
+  enabled:           false,
+  frequency_minutes: 60,
+  reingest_modified: true,
+};
 
 function formatSize(bytes) {
   if (bytes == null || Number.isNaN(Number(bytes))) return "—";
@@ -33,22 +45,9 @@ function readStoredToken() {
   if (!token || Date.now() >= exp - 30_000) {
     sessionStorage.removeItem(TOKEN_KEY);
     sessionStorage.removeItem(EXP_KEY);
-    sessionStorage.removeItem(ACCOUNT_KEY);
-    return "";
+    return { token: "", exp: 0 };
   }
-  return token;
-}
-
-function readStoredAccount() {
-  try { return JSON.parse(sessionStorage.getItem(ACCOUNT_KEY) ?? "null"); }
-  catch { return null; }
-}
-
-function driveHeaders(token) {
-  return {
-    ...authHeaders,
-    ...(token ? { "x-google-access-token": token } : {}),
-  };
+  return { token, exp };
 }
 
 export default function DrivePage() {
@@ -75,8 +74,11 @@ export default function DrivePage() {
 }
 
 function DrivePageInner() {
-  const [token, setToken]         = useState(readStoredToken);
-  const [account, setAccount]     = useState(readStoredAccount);
+  const stored = readStoredToken();
+  const [token, setToken]         = useState(stored.token);
+  const [tokenExp, setTokenExp]   = useState(stored.exp);
+  const [conn, setConn]           = useState(null);
+  const [settings, setSettings]   = useState(DEFAULT_SETTINGS);
   const [files, setFiles]         = useState([]);
   const [selected, setSelected]   = useState(new Set());
   const [path, setPath]           = useState([{ id: "root", name: "My Drive" }]);
@@ -86,42 +88,125 @@ function DrivePageInner() {
   const [nextPageToken, setNextPageToken] = useState(null);
   const [busy, setBusy]           = useState("");
   const [error, setError]         = useState("");
+  const [notice, setNotice]       = useState("");
 
-  const folderId = path[path.length - 1]?.id ?? "root";
+  const connected     = Boolean(token) || Boolean(conn?.connected);
+  const folderId      = path[path.length - 1]?.id ?? "root";
+  const currentFolder = path[path.length - 1] ?? { id: "root", name: "My Drive" };
+  const watchFolder   = conn?.watch_folder ?? { id: "root", name: "My Drive" };
+  const isWatching    = watchFolder.id === folderId && !search.trim();
 
-  const persistToken = useCallback((accessToken, expiresIn, accountInfo) => {
-    const exp = Date.now() + Math.max(60, Number(expiresIn) || 3600) * 1000;
+  const driveHeaders = useCallback((extra = {}) => ({
+    ...extra,
+    ...(token ? { "x-google-access-token": token } : {}),
+  }), [token]);
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const res  = await fetch(`${API_BASE}/api/drive/status`, { headers: authHeaders });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to load Drive status");
+      setConn(data);
+      setSettings({ ...DEFAULT_SETTINGS, ...data.auto_sync });
+      return data;
+    } catch (err) {
+      setError(err.message);
+      setConn({ connected: false });
+      return null;
+    }
+  }, []);
+
+  useEffect(() => { loadStatus(); }, [loadStatus]);
+
+  const pushToken = useCallback(async (accessToken, expiresIn) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/drive/connect`, {
+        method:  "POST",
+        headers: jsonHeaders,
+        body:    JSON.stringify({ access_token: accessToken, expires_in: expiresIn }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to register the connection");
+      setConn(data);
+      setSettings({ ...DEFAULT_SETTINGS, ...data.auto_sync });
+    } catch (err) {
+      // Browsing still works on the local token; only background sync suffers.
+      console.error("[drive] could not register token for auto-ingest:", err.message);
+    }
+  }, []);
+
+  const acceptToken = useCallback((accessToken, expiresIn) => {
+    const ttl = Math.max(60, Number(expiresIn) || 3600);
+    const exp = Date.now() + ttl * 1000;
     sessionStorage.setItem(TOKEN_KEY, accessToken);
     sessionStorage.setItem(EXP_KEY, String(exp));
-    if (accountInfo) sessionStorage.setItem(ACCOUNT_KEY, JSON.stringify(accountInfo));
     setToken(accessToken);
-    if (accountInfo) setAccount(accountInfo);
-  }, []);
-
-  const clearSession = useCallback(() => {
-    sessionStorage.removeItem(TOKEN_KEY);
-    sessionStorage.removeItem(EXP_KEY);
-    sessionStorage.removeItem(ACCOUNT_KEY);
-    setToken("");
-    setAccount(null);
-    setFiles([]);
-    setSelected(new Set());
-  }, []);
+    setTokenExp(exp);
+    setError("");
+    pushToken(accessToken, ttl);
+  }, [pushToken]);
 
   const connect = useGoogleLogin({
-    flow: "implicit",
-    scope: "https://www.googleapis.com/auth/drive.readonly",
-    onSuccess: (resp) => {
-      persistToken(resp.access_token, resp.expires_in);
-      setError("");
-    },
+    flow:  "implicit",
+    scope: DRIVE_SCOPE,
+    onSuccess: (resp) => acceptToken(resp.access_token, resp.expires_in),
     onError: () => setError("Google Drive authorization failed."),
   });
 
-  const loadFiles = useCallback(async (opts = {}) => {
-    const accessToken = opts.token ?? token;
-    if (!accessToken) return;
+  const renewToken = useGoogleLogin({
+    flow:   "implicit",
+    scope:  DRIVE_SCOPE,
+    prompt: "",
+    onSuccess: (resp) => acceptToken(resp.access_token, resp.expires_in),
+    onError: () => { /* the next scheduled attempt or a manual reconnect covers it */ },
+  });
 
+  const renewRef = useRef(renewToken);
+  renewRef.current = renewToken;
+
+  const pushedOnMount = useRef(false);
+  useEffect(() => {
+    if (pushedOnMount.current || !token || !tokenExp) return;
+    pushedOnMount.current = true;
+    pushToken(token, Math.round((tokenExp - Date.now()) / 1000));
+  }, [token, tokenExp, pushToken]);
+
+  useEffect(() => {
+    if (!tokenExp) return;
+    const delay = Math.max(1000, tokenExp - Date.now() - RENEW_LEAD_MS);
+    const timer = setTimeout(() => renewRef.current(), delay);
+    return () => clearTimeout(timer);
+  }, [tokenExp]);
+
+  function clearLocalToken() {
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(EXP_KEY);
+    setToken("");
+    setTokenExp(0);
+  }
+
+  async function handleDisconnect() {
+    if (!confirm("Disconnect Google Drive? Ingested files stay in the knowledge base.")) return;
+    setBusy("connect");
+    try {
+      const res  = await fetch(`${API_BASE}/api/drive/disconnect`, {
+        method: "POST", headers: jsonHeaders,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to disconnect");
+      setConn(data);
+      clearLocalToken();
+      setFiles([]);
+      setSelected(new Set());
+      setNotice("Google Drive disconnected.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const loadFiles = useCallback(async (opts = {}) => {
     const nextFolder = opts.folderId ?? folderId;
     const nextSearch = opts.search ?? search;
     const nextPage   = opts.pageToken ?? "";
@@ -129,19 +214,17 @@ function DrivePageInner() {
     setBusy("files");
     setError("");
     try {
-      const params = new URLSearchParams({
-        folderId: nextFolder,
-        limit: "50",
-      });
+      const params = new URLSearchParams({ folderId: nextFolder, limit: "50" });
       if (nextSearch.trim()) params.set("search", nextSearch.trim());
       if (nextPage) params.set("pageToken", nextPage);
 
       const res  = await fetch(`${API_BASE}/api/drive/files?${params}`, {
-        headers: driveHeaders(accessToken),
+        headers: driveHeaders(authHeaders),
       });
       const data = await res.json();
       if (res.status === 401) {
-        clearSession();
+        clearLocalToken();
+        setConn((c) => ({ ...(c ?? {}), connected: false }));
         throw new Error(data.error ?? "Google Drive authorization expired. Please reconnect.");
       }
       if (!res.ok) throw new Error(data.error ?? "Failed to load Drive files");
@@ -149,31 +232,17 @@ function DrivePageInner() {
       setFiles(data.files ?? []);
       setNextPageToken(data.nextPageToken ?? null);
       setSelected(new Set());
-
-      if (!account) {
-        try {
-          const s = await fetch(`${API_BASE}/api/drive/status`, {
-            headers: driveHeaders(accessToken),
-          });
-          const status = await s.json();
-          if (s.ok && status.account) {
-            sessionStorage.setItem(ACCOUNT_KEY, JSON.stringify(status.account));
-            setAccount(status.account);
-          }
-        } catch { /* listing already succeeded */ }
-      }
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy("");
     }
-  }, [token, folderId, search, account, clearSession]);
+  }, [folderId, search, driveHeaders]);
 
   useEffect(() => {
-    if (token) loadFiles({ pageToken: pageTokens[pageIndex] ?? "" });
-    // folder/page changes should refetch; search is applied explicitly
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, folderId, pageIndex]);
+    if (connected) loadFiles({ pageToken: pageTokens[pageIndex] ?? "" });
+
+  }, [connected, folderId, pageIndex]);
 
   function openFolder(folder) {
     setPath((prev) => {
@@ -196,11 +265,8 @@ function DrivePageInner() {
 
   function runSearch() {
     setPageTokens([""]);
-    if (pageIndex === 0) {
-      loadFiles({ search, pageToken: "" });
-    } else {
-      setPageIndex(0);
-    }
+    if (pageIndex === 0) loadFiles({ search, pageToken: "" });
+    else setPageIndex(0);
   }
 
   function goNext() {
@@ -218,8 +284,98 @@ function DrivePageInner() {
     setPageIndex((i) => i - 1);
   }
 
+  async function saveSettings(overrides = {}) {
+    setBusy("settings");
+    setError("");
+    try {
+      const res  = await fetch(`${API_BASE}/api/drive/settings`, {
+        method:  "PUT",
+        headers: driveHeaders(jsonHeaders),
+        body:    JSON.stringify({ auto_sync: settings, ...overrides }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to save settings");
+      setSettings({ ...DEFAULT_SETTINGS, ...data.auto_sync });
+      setConn((c) => ({ ...(c ?? {}), auto_sync: data.auto_sync, watch_folder: data.watch_folder }));
+      setNotice(
+        overrides.watch_folder
+          ? `Auto-ingest now watches “${data.watch_folder.name}”.`
+          : "Auto-ingest settings saved."
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function watchCurrentFolder() {
+    saveSettings({ watch_folder: { id: currentFolder.id, name: currentFolder.name } });
+  }
+
+  async function handleSyncNow() {
+    setBusy("sync");
+    setError("");
+    setNotice("");
+    try {
+      const res  = await fetch(`${API_BASE}/api/drive/sync`, {
+        method: "POST", headers: driveHeaders(jsonHeaders),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          data.reason === "not_connected"
+            ? "Google Drive is not connected on the server. Click Connect Google Drive again."
+            : data.error ?? "Sync failed"
+        );
+      }
+
+      setNotice(data.already_running ? "A sync is already running…" : "Sync started…");
+
+      let summary = "Sync finished.";
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 3000));
+
+        const s = await fetch(`${API_BASE}/api/drive/sync`, { headers: jsonHeaders });
+        const { sync } = await s.json();
+        if (!sync) break;
+
+        if (sync.running) {
+          const p = sync.progress;
+          setNotice(p?.current
+            ? `Syncing — ingesting “${p.current}” (${p.done ?? 0}/${p.total ?? "?"}` +
+              (p.pending != null ? `, ${p.pending} pending` : "") + ")…"
+            : "Scanning Drive…");
+          continue;
+        }
+
+        if (sync.error) throw new Error(sync.error);
+        const r = sync.result ?? {};
+        if (r.reason === "not_connected") throw new Error("Google Drive is not connected.");
+        summary =
+          `Sync complete — ingested ${r.ingested ?? 0} file(s)` +
+          (r.deferred ? `, ${r.deferred} queued for the next run` : "") +
+          (r.skipped ? `, ${r.skipped} skipped as unreadable` : "") +
+          (r.failed ? `, ${r.failed} failed and will be retried` : "") +
+          ` (scanned ${r.scanned ?? 0}).` +
+          (r.auth_expired ? " Sign-in expired mid-run — reconnect to continue." : "") +
+          (r.truncated ? ` Only the first ${r.maxFiles} files were scanned.` : "");
+        break;
+      }
+
+      setNotice(summary);
+      await loadStatus();
+      await loadFiles({ pageToken: pageTokens[pageIndex] ?? "" });
+    } catch (err) {
+      setError(err.message);
+      setNotice("");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function ingestIds(ids) {
-    if (!ids.length || !token) return;
+    if (!ids.length) return;
     setError("");
     setFiles((prev) =>
       prev.map((f) => ids.includes(f.id) ? { ...f, _status: "ingesting" } : f)
@@ -227,12 +383,13 @@ function DrivePageInner() {
     try {
       const res  = await fetch(`${API_BASE}/api/drive/ingest`, {
         method:  "POST",
-        headers: { "Content-Type": "application/json", ...driveHeaders(token) },
+        headers: driveHeaders(jsonHeaders),
         body:    JSON.stringify({ ids }),
       });
       const data = await res.json();
       if (res.status === 401) {
-        clearSession();
+        clearLocalToken();
+        setConn((c) => ({ ...(c ?? {}), connected: false }));
         throw new Error(data.error ?? "Google Drive authorization expired. Please reconnect.");
       }
       if (!res.ok) throw new Error(data.error ?? "Ingest failed");
@@ -273,17 +430,33 @@ function DrivePageInner() {
 
   const ingestedCount = files.filter((f) => f.ingested).length;
 
-  if (!token) {
+  const banners = (
+    <>
+      {error && (
+        <div className="result result--error" style={{ maxWidth: 700 }}>
+          <span className="result__icon">❌</span>
+          <span>{error}</span>
+        </div>
+      )}
+      {notice && (
+        <div className="result result--success" style={{ maxWidth: 700 }}>
+          <span className="result__icon">✅</span>
+          <span>{notice}</span>
+        </div>
+      )}
+    </>
+  );
+
+  if (conn === null) {
+    return <main className="main"><p className="fm-empty">Loading…</p></main>;
+  }
+
+  if (!connected) {
     return (
       <main className="main">
-        {error && (
-          <div className="result result--error" style={{ maxWidth: 700 }}>
-            <span className="result__icon">❌</span>
-            <span>{error}</span>
-          </div>
-        )}
+        {banners}
         <div className="fm-card" style={{ padding: 20 }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 520 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 560 }}>
             <div>
               <strong>Google Drive</strong>
               <p className="fm-meta" style={{ margin: "4px 0 0" }}>
@@ -305,12 +478,7 @@ function DrivePageInner() {
 
   return (
     <main className="main">
-      {error && (
-        <div className="result result--error" style={{ maxWidth: 700 }}>
-          <span className="result__icon">❌</span>
-          <span>{error}</span>
-        </div>
-      )}
+      {banners}
 
       <div className="fm-card" style={{ padding: 20, marginBottom: 20 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", justifyContent: "space-between" }}>
@@ -320,12 +488,78 @@ function DrivePageInner() {
               <span className="badge badge--success">Connected</span>
             </div>
             <span className="fm-meta">
-              Account: {account?.email ?? account?.name ?? "connected"}
+              Account: {conn.account?.email ?? conn.account?.name ?? "connected"}
+            </span>
+            <span className="fm-meta">
+              Last sync: {conn.last_synced_at ? new Date(conn.last_synced_at).toLocaleString() : "never"}
             </span>
           </div>
-          <button className="btn btn--ghost btn--sm" onClick={clearSession}>
-            Disconnect
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn--primary" onClick={handleSyncNow} disabled={busy === "sync"}>
+              {busy === "sync" ? "Syncing…" : "Sync now"}
+            </button>
+            <button className="btn btn--ghost btn--sm" onClick={handleDisconnect} disabled={busy === "connect"}>
+              Disconnect
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="fm-card" style={{ padding: 20, marginBottom: 20 }}>
+        <strong>Automatic ingestion</strong>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12, maxWidth: 560 }}>
+          <span className="fm-meta">
+            Watched folder: <strong>{watchFolder.name}</strong> — scanned recursively.
+            Every file that is not in the knowledge base yet gets ingested.
+            {conn.unusable_count
+              ? ` ${conn.unusable_count} file(s) were skipped as unreadable and are not retried until they change in Drive.`
+              : ""}
+          </span>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              className="fm-checkbox"
+              checked={settings.enabled}
+              onChange={(e) => setSettings((s) => ({ ...s, enabled: e.target.checked }))}
+            />
+            Automatically ingest new Drive files
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            Check every
+            <input
+              type="number"
+              min="5"
+              className="fm-input"
+              value={settings.frequency_minutes}
+              onChange={(e) => setSettings((s) => ({ ...s, frequency_minutes: +e.target.value }))}
+              style={{ width: 80, padding: "4px 8px", borderRadius: 6, border: "1px solid #ccc" }}
+            />
+            minutes
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              className="fm-checkbox"
+              checked={settings.reingest_modified}
+              onChange={(e) => setSettings((s) => ({ ...s, reingest_modified: e.target.checked }))}
+            />
+            Re-ingest files that changed in Drive
+          </label>
+          <span className="fm-meta">
+            Google sign-in lasts about an hour, and it is refreshed while this
+            page is open. Auto-ingest keeps running in the background after you
+            close the tab, and pauses if nobody opens the app for over an hour —
+            reopening this page resumes it.
+          </span>
+          <div>
+            <button
+              className="btn btn--primary btn--sm"
+              onClick={() => saveSettings()}
+              disabled={busy === "settings"}
+            >
+              {busy === "settings" ? "Saving…" : "Save settings"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -342,6 +576,14 @@ function DrivePageInner() {
             </span>
           ))}
         </nav>
+        <button
+          className="btn btn--ghost btn--sm"
+          onClick={watchCurrentFolder}
+          disabled={isWatching || busy === "settings" || !!search.trim()}
+          title="Auto-ingest everything in this folder and its subfolders"
+        >
+          {isWatching ? "Watching this folder" : "Watch this folder"}
+        </button>
       </div>
 
       <div className="fm-toolbar">

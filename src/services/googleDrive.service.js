@@ -2,6 +2,8 @@ const DRIVE_API = "https://www.googleapis.com/drive/v3";
 
 export const FOLDER_MIME = "application/vnd.google-apps.folder";
 
+export const SHORTCUT_MIME = "application/vnd.google-apps.shortcut";
+
 export const INGESTIBLE_MIME = {
   "application/pdf": { ext: ".pdf", exportMime: null, label: "PDF" },
   "text/plain":      { ext: ".txt", exportMime: null, label: "Text" },
@@ -31,8 +33,20 @@ export function mimeLabel(mimeType) {
 }
 
 function mimeQuery() {
-  const types = [FOLDER_MIME, ...Object.keys(INGESTIBLE_MIME)];
+  const types = [FOLDER_MIME, SHORTCUT_MIME, ...Object.keys(INGESTIBLE_MIME)];
   return types.map((m) => `mimeType = '${m}'`).join(" or ");
+}
+
+
+function resolveShortcut(file) {
+  if (file?.mimeType !== SHORTCUT_MIME) return file;
+  const targetId = file.shortcutDetails?.targetId;
+  if (!targetId) return file;
+  return {
+    ...file,
+    id:       targetId,
+    mimeType: file.shortcutDetails.targetMimeType ?? file.mimeType,
+  };
 }
 
 function escapeDriveQuery(value) {
@@ -60,15 +74,24 @@ async function driveFetch(accessToken, url) {
   }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`Google Drive error (${res.status}): ${body.slice(0, 240)}`);
+    const err = new Error(`Google Drive error (${res.status}): ${body.slice(0, 240) || res.statusText}`);
+    err.status = res.status;
+    throw err;
   }
   return res;
 }
 
 export async function getDriveAccount(accessToken) {
-  const res = await driveFetch(accessToken, "https://www.googleapis.com/oauth2/v3/userinfo");
+  const res = await driveFetch(
+    accessToken,
+    `${DRIVE_API}/about?fields=user(displayName,emailAddress,photoLink)`
+  );
   const data = await res.json();
-  return { email: data.email, name: data.name, picture: data.picture };
+  return {
+    email:   data.user?.emailAddress ?? null,
+    name:    data.user?.displayName ?? null,
+    picture: data.user?.photoLink ?? null,
+  };
 }
 
 export async function listDriveFiles(accessToken, {
@@ -79,7 +102,9 @@ export async function listDriveFiles(accessToken, {
 } = {}) {
   const params = new URLSearchParams({
     pageSize: String(Math.min(Math.max(pageSize, 1), 100)),
-    fields: "nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,iconLink)",
+    fields:
+      "nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,iconLink," +
+      "shortcutDetails(targetId,targetMimeType))",
     orderBy: "folder,modifiedTime desc",
     supportsAllDrives: "true",
     includeItemsFromAllDrives: "true",
@@ -98,19 +123,73 @@ export async function listDriveFiles(accessToken, {
   if (pageToken) params.set("pageToken", pageToken);
 
   const res = await driveFetch(accessToken, `${DRIVE_API}/files?${params}`);
-  return res.json();
+  const data = await res.json();
+
+  const files = (data.files ?? [])
+    .map(resolveShortcut)
+    .filter((f) => f.mimeType === FOLDER_MIME || isIngestible(f.mimeType));
+
+  return { ...data, files };
+}
+
+/**
+ * Walks a folder tree and returns every ingestible file inside it.
+ *
+ * @returns {Promise<{ files: object[], truncated: boolean, maxFiles: number }>}
+ */
+export async function listAllIngestibleFiles(accessToken, {
+  folderId = "root",
+  maxFiles = 500,
+} = {}) {
+  const files = [];
+  const seenFolders = new Set();
+
+  async function walk(currentFolderId) {
+    // Shortcuts can point back up the tree, so guard against cycles.
+    if (seenFolders.has(currentFolderId)) return;
+    seenFolders.add(currentFolderId);
+
+    let pageToken;
+    do {
+      const data = await listDriveFiles(accessToken, {
+        folderId: currentFolderId,
+        pageToken,
+        pageSize: 100,
+      });
+
+      const subFolders = [];
+      for (const file of data.files ?? []) {
+        if (file.mimeType === FOLDER_MIME) subFolders.push(file.id);
+        else if (files.length < maxFiles) files.push(file);
+      }
+
+      for (const id of subFolders) {
+        if (files.length >= maxFiles) break;
+        await walk(id);
+      }
+
+      pageToken = data.nextPageToken;
+    } while (pageToken && files.length < maxFiles);
+  }
+
+  await walk(folderId);
+
+  return { files, truncated: files.length >= maxFiles, maxFiles };
 }
 
 export async function getDriveFileMeta(accessToken, fileId) {
   const params = new URLSearchParams({
-    fields: "id,name,mimeType,size,modifiedTime,webViewLink",
+    fields: "id,name,mimeType,size,modifiedTime,webViewLink,shortcutDetails(targetId,targetMimeType)",
     supportsAllDrives: "true",
   });
   const res = await driveFetch(
     accessToken,
     `${DRIVE_API}/files/${encodeURIComponent(fileId)}?${params}`
   );
-  return res.json();
+  const meta = resolveShortcut(await res.json());
+
+  if (meta.id !== fileId) return getDriveFileMeta(accessToken, meta.id);
+  return meta;
 }
 
 export async function downloadDriveFile(accessToken, file) {

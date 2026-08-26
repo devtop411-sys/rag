@@ -19,6 +19,11 @@ const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
 const RENEW_LEAD_MS = 5 * 60 * 1000;
 
+const ROOTS = [
+  { id: "root",         name: "My Drive" },
+  { id: "sharedWithMe", name: "Shared with me" },
+];
+
 const DEFAULT_SETTINGS = {
   enabled:           false,
   frequency_minutes: 60,
@@ -81,7 +86,7 @@ function DrivePageInner() {
   const [settings, setSettings]   = useState(DEFAULT_SETTINGS);
   const [files, setFiles]         = useState([]);
   const [selected, setSelected]   = useState(new Set());
-  const [path, setPath]           = useState([{ id: "root", name: "My Drive" }]);
+  const [path, setPath]           = useState([ROOTS[0]]);
   const [search, setSearch]       = useState("");
   const [pageTokens, setPageTokens] = useState([""]);
   const [pageIndex, setPageIndex] = useState(0);
@@ -92,9 +97,10 @@ function DrivePageInner() {
 
   const connected     = Boolean(token) || Boolean(conn?.connected);
   const folderId      = path[path.length - 1]?.id ?? "root";
-  const currentFolder = path[path.length - 1] ?? { id: "root", name: "My Drive" };
-  const watchFolder   = conn?.watch_folder ?? { id: "root", name: "My Drive" };
-  const isWatching    = watchFolder.id === folderId && !search.trim();
+  const currentFolder = path[path.length - 1] ?? ROOTS[0];
+  const activeRootId  = path[0]?.id ?? "root";
+  const watchFolders  = conn?.watch_folders ?? ROOTS;
+  const isWatching    = watchFolders.some((f) => f.id === folderId) && !search.trim();
 
   const driveHeaders = useCallback((extra = {}) => ({
     ...extra,
@@ -244,15 +250,28 @@ function DrivePageInner() {
 
   }, [connected, folderId, pageIndex]);
 
-  function openFolder(folder) {
-    setPath((prev) => {
-      if (search.trim()) return [{ id: "root", name: "My Drive" }, { id: folder.id, name: folder.name }];
-      return [...prev, { id: folder.id, name: folder.name }];
-    });
+  function resetBrowsing() {
     setSearch("");
     setPageTokens([""]);
     setPageIndex(0);
     setNextPageToken(null);
+  }
+
+  function selectRoot(root) {
+    if (root.id === activeRootId && path.length === 1 && !search.trim()) return;
+    setPath([root]);
+    resetBrowsing();
+  }
+
+  function openFolder(folder) {
+    setPath((prev) => {
+      // Search spans every root, so anchor the result under whichever root is
+      // active rather than assuming My Drive.
+      const base = prev[0] ?? ROOTS[0];
+      if (search.trim()) return [base, { id: folder.id, name: folder.name }];
+      return [...prev, { id: folder.id, name: folder.name }];
+    });
+    resetBrowsing();
   }
 
   function goToCrumb(index) {
@@ -284,7 +303,7 @@ function DrivePageInner() {
     setPageIndex((i) => i - 1);
   }
 
-  async function saveSettings(overrides = {}) {
+  async function saveSettings(overrides = {}, notice = "") {
     setBusy("settings");
     setError("");
     try {
@@ -296,12 +315,8 @@ function DrivePageInner() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to save settings");
       setSettings({ ...DEFAULT_SETTINGS, ...data.auto_sync });
-      setConn((c) => ({ ...(c ?? {}), auto_sync: data.auto_sync, watch_folder: data.watch_folder }));
-      setNotice(
-        overrides.watch_folder
-          ? `Auto-ingest now watches “${data.watch_folder.name}”.`
-          : "Auto-ingest settings saved."
-      );
+      setConn((c) => ({ ...(c ?? {}), auto_sync: data.auto_sync, watch_folders: data.watch_folders }));
+      setNotice(notice || "Auto-ingest settings saved.");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -310,7 +325,17 @@ function DrivePageInner() {
   }
 
   function watchCurrentFolder() {
-    saveSettings({ watch_folder: { id: currentFolder.id, name: currentFolder.name } });
+    const next = [...watchFolders, { id: currentFolder.id, name: currentFolder.name }];
+    saveSettings({ watch_folders: next }, `Auto-ingest now also watches “${currentFolder.name}”.`);
+  }
+
+  function unwatchFolder(folder) {
+    const next = watchFolders.filter((f) => f.id !== folder.id);
+    if (!next.length) {
+      setError("At least one folder has to stay watched.");
+      return;
+    }
+    saveSettings({ watch_folders: next }, `Auto-ingest no longer watches “${folder.name}”.`);
   }
 
   async function handleSyncNow() {
@@ -509,12 +534,29 @@ function DrivePageInner() {
         <strong>Automatic ingestion</strong>
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12, maxWidth: 560 }}>
           <span className="fm-meta">
-            Watched folder: <strong>{watchFolder.name}</strong> — scanned recursively.
-            Every file that is not in the knowledge base yet gets ingested.
+            Watched folders are scanned recursively. Every file that is not in the
+            knowledge base yet gets ingested.
             {conn.unusable_count
               ? ` ${conn.unusable_count} file(s) were skipped as unreadable and are not retried until they change in Drive.`
               : ""}
           </span>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {watchFolders.map((folder) => (
+              <span key={folder.id} className="fm-chip">
+                {folder.name}
+                <button
+                  type="button"
+                  className="fm-chip__remove"
+                  onClick={() => unwatchFolder(folder)}
+                  disabled={busy === "settings"}
+                  title={`Stop auto-ingesting “${folder.name}”`}
+                  aria-label={`Stop watching ${folder.name}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <input
               type="checkbox"
@@ -564,6 +606,19 @@ function DrivePageInner() {
       </div>
 
       <div className="fm-toolbar">
+        {ROOTS.map((root) => (
+          <button
+            key={root.id}
+            className={root.id === activeRootId ? "btn btn--primary btn--sm" : "btn btn--ghost btn--sm"}
+            onClick={() => selectRoot(root)}
+            disabled={busy === "files"}
+          >
+            {root.name}
+          </button>
+        ))}
+      </div>
+
+      <div className="fm-toolbar">
         <nav className="fm-breadcrumb" aria-label="Drive folder">
           {path.map((crumb, i) => (
             <span key={`${crumb.id}-${i}`}>
@@ -580,7 +635,7 @@ function DrivePageInner() {
           className="btn btn--ghost btn--sm"
           onClick={watchCurrentFolder}
           disabled={isWatching || busy === "settings" || !!search.trim()}
-          title="Auto-ingest everything in this folder and its subfolders"
+          title="Also auto-ingest everything in this folder and its subfolders"
         >
           {isWatching ? "Watching this folder" : "Watch this folder"}
         </button>
@@ -623,7 +678,11 @@ function DrivePageInner() {
       <div className="fm-card">
         {files.length === 0 && busy !== "files" && (
           <p className="fm-empty">
-            {search.trim() ? "No matching files." : "This folder is empty."}
+            {search.trim()
+              ? "No matching files."
+              : folderId === "sharedWithMe"
+                ? "Nothing has been shared with this account yet."
+                : "This folder is empty."}
           </p>
         )}
 

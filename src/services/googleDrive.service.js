@@ -4,6 +4,17 @@ export const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 export const SHORTCUT_MIME = "application/vnd.google-apps.shortcut";
 
+export const SHARED_ROOT_ID = "sharedWithMe";
+
+export const VIRTUAL_ROOTS = {
+  root:             "My Drive",
+  [SHARED_ROOT_ID]: "Shared with me",
+};
+
+export function isVirtualRoot(id) {
+  return Object.prototype.hasOwnProperty.call(VIRTUAL_ROOTS, id);
+}
+
 export const INGESTIBLE_MIME = {
   "application/pdf": { ext: ".pdf", exportMime: null, label: "PDF" },
   "text/plain":      { ext: ".txt", exportMime: null, label: "Text" },
@@ -116,6 +127,8 @@ export async function listDriveFiles(accessToken, {
   const trimmed = search.trim();
   if (trimmed) {
     clauses.push(`name contains '${escapeDriveQuery(trimmed)}'`);
+  } else if (folderId === SHARED_ROOT_ID) {
+    clauses.push("sharedWithMe = true");
   } else {
     clauses.push(`'${escapeDriveQuery(folderId)}' in parents`);
   }
@@ -133,16 +146,26 @@ export async function listDriveFiles(accessToken, {
 }
 
 /**
- * Walks a folder tree and returns every ingestible file inside it.
+ * Walks one or more folder trees and returns every ingestible file inside them.
  *
+ * Roots share a single file budget and dedupe set, so overlapping trees (a
+ * shared folder that is also shortcutted into My Drive, say) yield each file
+ * once.
+ *
+ * @param {object}   options
+ * @param {string}   [options.folderId]  single root to walk
+ * @param {string[]} [options.folderIds] several roots; takes precedence
  * @returns {Promise<{ files: object[], truncated: boolean, maxFiles: number }>}
  */
 export async function listAllIngestibleFiles(accessToken, {
   folderId = "root",
+  folderIds,
   maxFiles = 500,
 } = {}) {
+  const roots = folderIds?.length ? folderIds : [folderId];
   const files = [];
   const seenFolders = new Set();
+  const seenFiles   = new Set();
 
   async function walk(currentFolderId) {
     // Shortcuts can point back up the tree, so guard against cycles.
@@ -160,7 +183,10 @@ export async function listAllIngestibleFiles(accessToken, {
       const subFolders = [];
       for (const file of data.files ?? []) {
         if (file.mimeType === FOLDER_MIME) subFolders.push(file.id);
-        else if (files.length < maxFiles) files.push(file);
+        else if (files.length < maxFiles && !seenFiles.has(file.id)) {
+          seenFiles.add(file.id);
+          files.push(file);
+        }
       }
 
       for (const id of subFolders) {
@@ -172,7 +198,10 @@ export async function listAllIngestibleFiles(accessToken, {
     } while (pageToken && files.length < maxFiles);
   }
 
-  await walk(folderId);
+  for (const root of roots) {
+    if (files.length >= maxFiles) break;
+    await walk(root);
+  }
 
   return { files, truncated: files.length >= maxFiles, maxFiles };
 }

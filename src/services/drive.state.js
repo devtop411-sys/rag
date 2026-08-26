@@ -2,7 +2,7 @@ import { qdrant } from "./qdrant.service.js";
 import {
   DRIVE_STATE_COLLECTION,
   DRIVE_DEFAULT_SETTINGS,
-  DRIVE_DEFAULT_WATCH_FOLDER,
+  DRIVE_DEFAULT_WATCH_FOLDERS,
 } from "../config/constants.js";
 
 const CONNECTION_ID = "00000000-0000-4000-8000-000000000002";
@@ -37,11 +37,17 @@ function emptyConnection() {
     token_expires_at: null,
     status:           "disconnected",
     account:          null,
-    watch_folder:     { ...DRIVE_DEFAULT_WATCH_FOLDER },
+    watch_folders:    DRIVE_DEFAULT_WATCH_FOLDERS.map((f) => ({ ...f })),
     last_synced_at:   null,
     unusable_files:   [],
     auto_sync:        { ...DRIVE_DEFAULT_SETTINGS },
   };
+}
+
+function readWatchFolders(payload) {
+  if (Array.isArray(payload.watch_folders)) return payload.watch_folders;
+  if (payload.watch_folder) return [payload.watch_folder];
+  return DRIVE_DEFAULT_WATCH_FOLDERS.map((f) => ({ ...f }));
 }
 
 export function hasLiveToken(conn) {
@@ -65,7 +71,7 @@ export async function getConnection() {
         token_expires_at: payload.token_expires_at || null,
         status:           payload.status || "disconnected",
         account:          payload.account || null,
-        watch_folder:     payload.watch_folder || { ...DRIVE_DEFAULT_WATCH_FOLDER },
+        watch_folders:    readWatchFolders(payload),
         last_synced_at:   payload.last_synced_at || null,
         unusable_files:   payload.unusable_files || [],
         auto_sync:        { ...DRIVE_DEFAULT_SETTINGS, ...(payload.auto_sync || {}) },
@@ -87,9 +93,10 @@ export async function saveConnection(patch) {
   const next = {
     ...current,
     ...patch,
-    auto_sync:    { ...current.auto_sync, ...(patch.auto_sync || {}) },
-    watch_folder: patch.watch_folder ?? current.watch_folder,
+    auto_sync:     { ...current.auto_sync, ...(patch.auto_sync || {}) },
+    watch_folders: patch.watch_folders ?? current.watch_folders,
   };
+  delete next.watch_folder;
 
   await qdrant.upsert(DRIVE_STATE_COLLECTION, {
     wait: true,
@@ -142,7 +149,7 @@ export function publicConnection(conn) {
     connected:        hasLiveToken(conn),
     status:           conn.status,
     account:          conn.account,
-    watch_folder:     conn.watch_folder,
+    watch_folders:    conn.watch_folders,
     last_synced_at:   conn.last_synced_at,
     token_expires_at: conn.token_expires_at,
     unusable_count:   (conn.unusable_files ?? []).length,

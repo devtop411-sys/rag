@@ -1,6 +1,8 @@
 import { runWithConcurrency } from "../utils/concurrency.utils.js";
 import {
   FOLDER_MIME,
+  VIRTUAL_ROOTS,
+  isVirtualRoot,
   isIngestible,
   mimeLabel,
   getDriveAccount,
@@ -186,10 +188,37 @@ export async function ingest(req, res) {
 export async function getSettings(req, res) {
   try {
     const conn = await getConnection();
-    res.json({ auto_sync: conn.auto_sync, watch_folder: conn.watch_folder });
+    res.json({ auto_sync: conn.auto_sync, watch_folders: conn.watch_folders });
   } catch (err) {
     sendError(res, err);
   }
+}
+
+async function resolveWatchFolders(req, requested) {
+  const resolved = [];
+  const seen     = new Set();
+  let accessToken;
+
+  for (const entry of requested) {
+    if (!entry?.id || seen.has(entry.id)) continue;
+    seen.add(entry.id);
+
+    if (isVirtualRoot(entry.id)) {
+      resolved.push({ id: entry.id, name: VIRTUAL_ROOTS[entry.id] });
+      continue;
+    }
+
+    accessToken ??= await requestAccessToken(req);
+    const meta = await getDriveFileMeta(accessToken, entry.id);
+    if (meta.mimeType !== FOLDER_MIME) {
+      const err = new Error(`"${meta.name}" is not a folder`);
+      err.status = 400;
+      throw err;
+    }
+    resolved.push({ id: meta.id, name: meta.name });
+  }
+
+  return resolved;
 }
 
 export async function updateSettings(req, res) {
@@ -205,20 +234,19 @@ export async function updateSettings(req, res) {
     }
     const update = { auto_sync: patch };
 
-    const folder = req.body?.watch_folder;
-    if (folder?.id === "root") {
-      update.watch_folder = { id: "root", name: "My Drive" };
-    } else if (folder?.id) {
-      const accessToken = await requestAccessToken(req);
-      const meta = await getDriveFileMeta(accessToken, folder.id);
-      if (meta.mimeType !== FOLDER_MIME) {
-        return res.status(400).json({ error: "watch_folder must be a folder" });
+    const requested = Array.isArray(req.body?.watch_folders)
+      ? req.body.watch_folders
+      : req.body?.watch_folder ? [req.body.watch_folder] : null;
+
+    if (requested) {
+      if (!requested.length) {
+        return res.status(400).json({ error: "Watch at least one folder" });
       }
-      update.watch_folder = { id: meta.id, name: meta.name };
+      update.watch_folders = await resolveWatchFolders(req, requested);
     }
 
     const conn = await saveConnection(update);
-    res.json({ auto_sync: conn.auto_sync, watch_folder: conn.watch_folder });
+    res.json({ auto_sync: conn.auto_sync, watch_folders: conn.watch_folders });
   } catch (err) {
     console.error("[drive/settings] error:", err.message);
     sendError(res, err);

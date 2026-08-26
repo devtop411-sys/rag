@@ -101,7 +101,10 @@ export const DRIVE_DEFAULT_SETTINGS = {
   reingest_modified: true,
 };
 
-export const DRIVE_DEFAULT_WATCH_FOLDER = { id: "root", name: "My Drive" };
+export const DRIVE_DEFAULT_WATCH_FOLDERS = [
+  { id: "root",         name: "My Drive" },
+  { id: "sharedWithMe", name: "Shared with me" },
+];
 
 export const ALLOWED_DOMAIN  = "collider.vc";
 export const ALLOWED_EMAILS  = new Set(["devtop411@gmail.com"]);

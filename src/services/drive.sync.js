@@ -6,6 +6,7 @@ import {
 } from "./drive.state.js";
 import { listAllIngestibleFiles } from "./googleDrive.service.js";
 import { ingestDriveFile, getDriveIngestedMeta } from "./drive.ingest.js";
+import { DRIVE_DEFAULT_WATCH_FOLDERS } from "../config/constants.js";
 
 let progress = null;
 let current  = null;
@@ -74,10 +75,12 @@ export async function runSync() {
   }
 
   const accessToken = await getAccessToken();
-  const folder = conn.watch_folder ?? { id: "root", name: "My Drive" };
+  const folders = conn.watch_folders?.length
+    ? conn.watch_folders
+    : DRIVE_DEFAULT_WATCH_FOLDERS;
 
   const { files, truncated, maxFiles } = await listAllIngestibleFiles(accessToken, {
-    folderId: folder.id,
+    folderIds: folders.map((f) => f.id),
   });
 
   const unusable = new Map(
@@ -184,12 +187,12 @@ export async function runSync() {
   console.log(
     `[drive] Sync complete — ingested ${ingested}, skipped ${skipped}, failed ${failed}, ` +
     `deferred ${deferred}, up-to-date ${alreadyIngested}, previously skipped ${knownUnusable}, ` +
-    `scanned ${files.length}`
+    `scanned ${files.length} across ${folders.map((f) => f.name).join(" + ")}`
   );
 
   return {
     ok: true,
-    folder,
+    folders,
     ingested,
     deferred,
     failed,

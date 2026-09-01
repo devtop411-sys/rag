@@ -97,7 +97,7 @@ export const DRIVE_STATE_COLLECTION =
 
 export const DRIVE_DEFAULT_SETTINGS = {
   enabled:           false,
-  frequency_minutes: 60,
+  frequency_minutes: 6 * 60,
   reingest_modified: true,
 };
 

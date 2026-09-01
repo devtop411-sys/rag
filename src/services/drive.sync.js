@@ -223,7 +223,7 @@ async function tickScheduler() {
     const conn = await getConnection();
     if (!conn.auto_sync?.enabled || !hasLiveToken(conn)) return;
 
-    const freqMs = (conn.auto_sync.frequency_minutes || 60) * 60 * 1000;
+    const freqMs = (conn.auto_sync.frequency_minutes || 6 * 60) * 60 * 1000;
     nextRunAt = Date.now() + freqMs;
 
     const result = await startSync().promise;

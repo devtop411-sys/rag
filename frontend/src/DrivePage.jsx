@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { GoogleOAuthProvider, useGoogleLogin } from "@react-oauth/google";
+import { useState, useEffect, useCallback } from "react";
+import { useDriveAuth } from "./driveAuth.jsx";
 
 const API_BASE    = import.meta.env.VITE_API_URL ?? "";
 const API_KEY     = import.meta.env.VITE_API_KEY ?? "";
@@ -11,14 +11,6 @@ const DRIVE_CLIENT_ID =
 const authHeaders = API_KEY ? { "x-api-key": API_KEY } : {};
 const jsonHeaders = { "Content-Type": "application/json", ...authHeaders };
 
-const TOKEN_KEY = "collider_drive_token";
-const EXP_KEY   = "collider_drive_exp";
-
-const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
-
-
-const RENEW_LEAD_MS = 5 * 60 * 1000;
-
 const ROOTS = [
   { id: "root",         name: "My Drive" },
   { id: "sharedWithMe", name: "Shared with me" },
@@ -26,7 +18,7 @@ const ROOTS = [
 
 const DEFAULT_SETTINGS = {
   enabled:           false,
-  frequency_minutes: 60,
+  frequency_minutes: 6 * 60,
   reingest_modified: true,
 };
 
@@ -42,17 +34,6 @@ function formatDate(value) {
   if (!value) return "—";
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
-}
-
-function readStoredToken() {
-  const token = sessionStorage.getItem(TOKEN_KEY);
-  const exp   = Number(sessionStorage.getItem(EXP_KEY) || 0);
-  if (!token || Date.now() >= exp - 30_000) {
-    sessionStorage.removeItem(TOKEN_KEY);
-    sessionStorage.removeItem(EXP_KEY);
-    return { token: "", exp: 0 };
-  }
-  return { token, exp };
 }
 
 export default function DrivePage() {
@@ -71,17 +52,14 @@ export default function DrivePage() {
     );
   }
 
-  return (
-    <GoogleOAuthProvider clientId={DRIVE_CLIENT_ID} locale="en">
-      <DrivePageInner />
-    </GoogleOAuthProvider>
-  );
+  return <DrivePageInner />;
 }
 
 function DrivePageInner() {
-  const stored = readStoredToken();
-  const [token, setToken]         = useState(stored.token);
-  const [tokenExp, setTokenExp]   = useState(stored.exp);
+  const {
+    live, renewing, authError,
+    connect, disconnect, renew, driveHeaders,
+  } = useDriveAuth();
   const [conn, setConn]           = useState(null);
   const [settings, setSettings]   = useState(DEFAULT_SETTINGS);
   const [files, setFiles]         = useState([]);
@@ -95,17 +73,12 @@ function DrivePageInner() {
   const [error, setError]         = useState("");
   const [notice, setNotice]       = useState("");
 
-  const connected     = Boolean(token) || Boolean(conn?.connected);
+  const connected     = live || Boolean(conn?.connected);
   const folderId      = path[path.length - 1]?.id ?? "root";
   const currentFolder = path[path.length - 1] ?? ROOTS[0];
   const activeRootId  = path[0]?.id ?? "root";
   const watchFolders  = conn?.watch_folders ?? ROOTS;
   const isWatching    = watchFolders.some((f) => f.id === folderId) && !search.trim();
-
-  const driveHeaders = useCallback((extra = {}) => ({
-    ...extra,
-    ...(token ? { "x-google-access-token": token } : {}),
-  }), [token]);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -124,84 +97,16 @@ function DrivePageInner() {
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
-  const pushToken = useCallback(async (accessToken, expiresIn) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/drive/connect`, {
-        method:  "POST",
-        headers: jsonHeaders,
-        body:    JSON.stringify({ access_token: accessToken, expires_in: expiresIn }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to register the connection");
-      setConn(data);
-      setSettings({ ...DEFAULT_SETTINGS, ...data.auto_sync });
-    } catch (err) {
-      // Browsing still works on the local token; only background sync suffers.
-      console.error("[drive] could not register token for auto-ingest:", err.message);
-    }
-  }, []);
-
-  const acceptToken = useCallback((accessToken, expiresIn) => {
-    const ttl = Math.max(60, Number(expiresIn) || 3600);
-    const exp = Date.now() + ttl * 1000;
-    sessionStorage.setItem(TOKEN_KEY, accessToken);
-    sessionStorage.setItem(EXP_KEY, String(exp));
-    setToken(accessToken);
-    setTokenExp(exp);
-    setError("");
-    pushToken(accessToken, ttl);
-  }, [pushToken]);
-
-  const connect = useGoogleLogin({
-    flow:  "implicit",
-    scope: DRIVE_SCOPE,
-    onSuccess: (resp) => acceptToken(resp.access_token, resp.expires_in),
-    onError: () => setError("Google Drive authorization failed."),
-  });
-
-  const renewToken = useGoogleLogin({
-    flow:   "implicit",
-    scope:  DRIVE_SCOPE,
-    prompt: "",
-    onSuccess: (resp) => acceptToken(resp.access_token, resp.expires_in),
-    onError: () => { /* the next scheduled attempt or a manual reconnect covers it */ },
-  });
-
-  const renewRef = useRef(renewToken);
-  renewRef.current = renewToken;
-
-  const pushedOnMount = useRef(false);
   useEffect(() => {
-    if (pushedOnMount.current || !token || !tokenExp) return;
-    pushedOnMount.current = true;
-    pushToken(token, Math.round((tokenExp - Date.now()) / 1000));
-  }, [token, tokenExp, pushToken]);
-
-  useEffect(() => {
-    if (!tokenExp) return;
-    const delay = Math.max(1000, tokenExp - Date.now() - RENEW_LEAD_MS);
-    const timer = setTimeout(() => renewRef.current(), delay);
-    return () => clearTimeout(timer);
-  }, [tokenExp]);
-
-  function clearLocalToken() {
-    sessionStorage.removeItem(TOKEN_KEY);
-    sessionStorage.removeItem(EXP_KEY);
-    setToken("");
-    setTokenExp(0);
-  }
+    if (live) loadStatus();
+  }, [live, loadStatus]);
 
   async function handleDisconnect() {
     if (!confirm("Disconnect Google Drive? Ingested files stay in the knowledge base.")) return;
     setBusy("connect");
     try {
-      const res  = await fetch(`${API_BASE}/api/drive/disconnect`, {
-        method: "POST", headers: jsonHeaders,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to disconnect");
+      const data = await disconnect();
       setConn(data);
-      clearLocalToken();
       setFiles([]);
       setSelected(new Set());
       setNotice("Google Drive disconnected.");
@@ -229,9 +134,8 @@ function DrivePageInner() {
       });
       const data = await res.json();
       if (res.status === 401) {
-        clearLocalToken();
-        setConn((c) => ({ ...(c ?? {}), connected: false }));
-        throw new Error(data.error ?? "Google Drive authorization expired. Please reconnect.");
+        renew();
+        throw new Error(data.error ?? "Google Drive authorization expired. Reconnecting…");
       }
       if (!res.ok) throw new Error(data.error ?? "Failed to load Drive files");
 
@@ -243,7 +147,7 @@ function DrivePageInner() {
     } finally {
       setBusy("");
     }
-  }, [folderId, search, driveHeaders]);
+  }, [folderId, search, driveHeaders, renew]);
 
   useEffect(() => {
     if (connected) loadFiles({ pageToken: pageTokens[pageIndex] ?? "" });
@@ -265,8 +169,6 @@ function DrivePageInner() {
 
   function openFolder(folder) {
     setPath((prev) => {
-      // Search spans every root, so anchor the result under whichever root is
-      // active rather than assuming My Drive.
       const base = prev[0] ?? ROOTS[0];
       if (search.trim()) return [base, { id: folder.id, name: folder.name }];
       return [...prev, { id: folder.id, name: folder.name }];
@@ -348,9 +250,10 @@ function DrivePageInner() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (data.reason === "not_connected") renew();
         throw new Error(
           data.reason === "not_connected"
-            ? "Google Drive is not connected on the server. Click Connect Google Drive again."
+            ? "Google Drive sign-in expired. Reconnecting…"
             : data.error ?? "Sync failed"
         );
       }
@@ -413,9 +316,8 @@ function DrivePageInner() {
       });
       const data = await res.json();
       if (res.status === 401) {
-        clearLocalToken();
-        setConn((c) => ({ ...(c ?? {}), connected: false }));
-        throw new Error(data.error ?? "Google Drive authorization expired. Please reconnect.");
+        renew();
+        throw new Error(data.error ?? "Google Drive authorization expired. Reconnecting…");
       }
       if (!res.ok) throw new Error(data.error ?? "Ingest failed");
 
@@ -463,6 +365,12 @@ function DrivePageInner() {
           <span>{error}</span>
         </div>
       )}
+      {authError && !error && (
+        <div className="result result--error" style={{ maxWidth: 700 }}>
+          <span className="result__icon">❌</span>
+          <span>{authError}</span>
+        </div>
+      )}
       {notice && (
         <div className="result result--success" style={{ maxWidth: 700 }}>
           <span className="result__icon">✅</span>
@@ -485,14 +393,14 @@ function DrivePageInner() {
             <div>
               <strong>Google Drive</strong>
               <p className="fm-meta" style={{ margin: "4px 0 0" }}>
-                Connect your Google account to browse Drive files and ingest
-                them into the knowledge base. PDFs, Docs, Sheets, Slides, Word,
-                Markdown, and text files are supported.
+                {renewing
+                  ? "Refreshing the Google Drive session so auto-ingest can continue…"
+                  : "Connect your Google account to browse Drive files and ingest them into the knowledge base. PDFs, Docs, Sheets, Slides, Word, Markdown, and text files are supported."}
               </p>
             </div>
             <div>
-              <button className="btn btn--primary" onClick={() => connect()}>
-                Connect Google Drive
+              <button className="btn btn--primary" onClick={() => connect()} disabled={renewing}>
+                {renewing ? "Reconnecting…" : "Connect Google Drive"}
               </button>
             </div>
           </div>
@@ -570,13 +478,16 @@ function DrivePageInner() {
             Check every
             <input
               type="number"
-              min="5"
+              min="1"
               className="fm-input"
-              value={settings.frequency_minutes}
-              onChange={(e) => setSettings((s) => ({ ...s, frequency_minutes: +e.target.value }))}
+              value={Math.max(1, Math.round((settings.frequency_minutes || 360) / 60))}
+              onChange={(e) => setSettings((s) => ({
+                ...s,
+                frequency_minutes: Math.max(1, +e.target.value || 1) * 60,
+              }))}
               style={{ width: 80, padding: "4px 8px", borderRadius: 6, border: "1px solid #ccc" }}
             />
-            minutes
+            hours
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <input
@@ -588,10 +499,9 @@ function DrivePageInner() {
             Re-ingest files that changed in Drive
           </label>
           <span className="fm-meta">
-            Google sign-in lasts about an hour, and it is refreshed while this
-            page is open. Auto-ingest keeps running in the background after you
-            close the tab, and pauses if nobody opens the app for over an hour —
-            reopening this page resumes it.
+            Auto-ingest stays signed in while any page of this app is open, and
+            it refreshes the Google session on its own. If the browser is closed
+            overnight, reopen the app — missed files are picked up automatically.
           </span>
           <div>
             <button

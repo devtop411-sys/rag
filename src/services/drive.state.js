@@ -50,6 +50,14 @@ function readWatchFolders(payload) {
   return DRIVE_DEFAULT_WATCH_FOLDERS.map((f) => ({ ...f }));
 }
 
+function readAutoSync(payload) {
+  const auto = { ...DRIVE_DEFAULT_SETTINGS, ...(payload.auto_sync || {}) };
+  if (!Number.isFinite(+auto.frequency_minutes) || auto.frequency_minutes < 60) {
+    auto.frequency_minutes = DRIVE_DEFAULT_SETTINGS.frequency_minutes;
+  }
+  return auto;
+}
+
 export function hasLiveToken(conn) {
   if (!conn?.access_token || !conn.token_expires_at) return false;
   const expiresAt = Date.parse(conn.token_expires_at);
@@ -74,7 +82,7 @@ export async function getConnection() {
         watch_folders:    readWatchFolders(payload),
         last_synced_at:   payload.last_synced_at || null,
         unusable_files:   payload.unusable_files || [],
-        auto_sync:        { ...DRIVE_DEFAULT_SETTINGS, ...(payload.auto_sync || {}) },
+        auto_sync:        readAutoSync(payload),
       };
     }
   } catch (err) {

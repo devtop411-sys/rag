@@ -82,8 +82,15 @@ export async function connect(req, res) {
 
     const conn = await saveAccessToken({ accessToken, expiresIn, account });
 
-    if (!hasLiveToken(previous)) {
-      console.log(`[drive] Connected as ${account?.email ?? "unknown account"}`);
+    const resumed = !hasLiveToken(previous);
+    if (resumed) {
+      console.log(`[drive] Connected as ${account?.email ?? conn.account?.email ?? "unknown account"}`);
+  
+      const ready = conn.auto_sync?.enabled
+        ? conn
+        : await saveConnection({ auto_sync: { enabled: true } });
+      startSync();
+      return res.json(publicConnection(ready));
     }
     res.json(publicConnection(conn));
   } catch (err) {
@@ -94,7 +101,7 @@ export async function connect(req, res) {
 
 export async function disconnect(req, res) {
   try {
-    await saveConnection({ auto_sync: { enabled: false } });
+   
     const conn = await clearAccessToken();
     res.json(publicConnection(conn));
   } catch (err) {
@@ -227,7 +234,7 @@ export async function updateSettings(req, res) {
     const patch = {};
     if (typeof incoming.enabled === "boolean") patch.enabled = incoming.enabled;
     if (Number.isFinite(+incoming.frequency_minutes)) {
-      patch.frequency_minutes = Math.max(5, +incoming.frequency_minutes);
+      patch.frequency_minutes = Math.max(60, +incoming.frequency_minutes);
     }
     if (typeof incoming.reingest_modified === "boolean") {
       patch.reingest_modified = incoming.reingest_modified;

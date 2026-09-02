@@ -75,6 +75,14 @@ export function DriveAuthProvider({ children }) {
     return data;
   }, []);
 
+  const clearLocalSession = useCallback((message = "") => {
+    clearStored();
+    setToken("");
+    setTokenExp(0);
+    setRenewing(false);
+    if (message) setAuthError(message);
+  }, []);
+
   const acceptToken = useCallback((accessToken, expiresIn) => {
     const ttl = Math.max(60, Number(expiresIn) || 3600);
     const exp = Date.now() + ttl * 1000;
@@ -83,24 +91,38 @@ export function DriveAuthProvider({ children }) {
     setTokenExp(exp);
     setAuthError("");
     setRenewing(false);
-    pushToken(accessToken, ttl).catch((err) => {
+    return pushToken(accessToken, ttl).catch((err) => {
       console.error("[drive] could not register token for auto-ingest:", err.message);
+      throw err;
     });
   }, [pushToken]);
 
   const connect = useGoogleLogin({
     flow:  "implicit",
     scope: DRIVE_SCOPE,
-    onSuccess: (resp) => acceptToken(resp.access_token, resp.expires_in),
+    onSuccess: (resp) => {
+      acceptToken(resp.access_token, resp.expires_in).catch(() => {
+        setAuthError("Connected in browser, but the server could not store the session. Try again.");
+      });
+    },
     onError: () => setAuthError("Google Drive authorization failed."),
   });
 
   const renewToken = useGoogleLogin({
     flow:   "implicit",
     scope:  DRIVE_SCOPE,
-    prompt: "",
-    onSuccess: (resp) => acceptToken(resp.access_token, resp.expires_in),
-    onError: () => setRenewing(false),
+    prompt: "none",
+    onSuccess: (resp) => {
+      acceptToken(resp.access_token, resp.expires_in).catch(() => {
+        clearLocalSession("Could not refresh the Google Drive session. Please reconnect.");
+      });
+    },
+    onError: () => {
+      clearLocalSession("Google Drive sign-in expired. Please reconnect.");
+    },
+    onNonOAuthError: () => {
+      clearLocalSession("Google Drive sign-in expired. Please reconnect.");
+    },
   });
 
   const renewRef  = useRef(renewToken);
@@ -111,14 +133,15 @@ export function DriveAuthProvider({ children }) {
   expRef.current   = tokenExp;
 
   const renew = useCallback(() => {
+    if (renewing) return;
     setRenewing(true);
     try {
       renewRef.current();
     } catch (err) {
       console.error("[drive] silent renew failed:", err.message);
-      setRenewing(false);
+      clearLocalSession("Google Drive sign-in expired. Please reconnect.");
     }
-  }, []);
+  }, [renewing, clearLocalSession]);
 
   useEffect(() => {
     const { token: t, exp } = readStored();
@@ -126,7 +149,6 @@ export function DriveAuthProvider({ children }) {
       pushToken(t, Math.round((exp - Date.now()) / 1000)).catch(() => {});
       return;
     }
-    // Revive a previously connected Drive session; do not prompt first-time users.
     if (t) renew();
   }, [pushToken, renew]);
 

@@ -135,13 +135,15 @@ function DrivePageInner() {
       const data = await res.json();
       if (res.status === 401) {
         renew();
-        throw new Error(data.error ?? "Google Drive authorization expired. Reconnecting…");
+        setNotice("Refreshing Google Drive sign-in…");
+        return;
       }
       if (!res.ok) throw new Error(data.error ?? "Failed to load Drive files");
 
       setFiles(data.files ?? []);
       setNextPageToken(data.nextPageToken ?? null);
       setSelected(new Set());
+      setNotice("");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -151,8 +153,7 @@ function DrivePageInner() {
 
   useEffect(() => {
     if (connected) loadFiles({ pageToken: pageTokens[pageIndex] ?? "" });
-
-  }, [connected, folderId, pageIndex]);
+  }, [connected, folderId, pageIndex, live]);
 
   function resetBrowsing() {
     setSearch("");
@@ -250,12 +251,12 @@ function DrivePageInner() {
       });
       const data = await res.json();
       if (!res.ok) {
-        if (data.reason === "not_connected") renew();
-        throw new Error(
-          data.reason === "not_connected"
-            ? "Google Drive sign-in expired. Reconnecting…"
-            : data.error ?? "Sync failed"
-        );
+        if (data.reason === "not_connected") {
+          renew();
+          setNotice("Refreshing Google Drive sign-in…");
+          return;
+        }
+        throw new Error(data.error ?? "Sync failed");
       }
 
       setNotice(data.already_running ? "A sync is already running…" : "Sync started…");
@@ -317,7 +318,11 @@ function DrivePageInner() {
       const data = await res.json();
       if (res.status === 401) {
         renew();
-        throw new Error(data.error ?? "Google Drive authorization expired. Reconnecting…");
+        setNotice("Refreshing Google Drive sign-in…");
+        setFiles((prev) =>
+          prev.map((f) => ids.includes(f.id) ? { ...f, _status: undefined } : f)
+        );
+        return;
       }
       if (!res.ok) throw new Error(data.error ?? "Ingest failed");
 

@@ -10,6 +10,7 @@ export async function firefliesRequest(apiKey, query, variables = {}) {
       Authorization:   `Bearer ${apiKey}`,
     },
     body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(Number(process.env.FIREFLIES_TIMEOUT_MS) || 60_000),
   });
 
   const text = await response.text();

@@ -5,6 +5,7 @@ const VOYAGE_URL = "https://api.voyageai.com/v1/embeddings";
 
 const MAX_RPM = Number(process.env.VOYAGE_MAX_RPM) || 3;
 const MAX_TPM = Number(process.env.VOYAGE_MAX_TPM) || 10_000;
+const VOYAGE_TIMEOUT_MS = Number(process.env.VOYAGE_TIMEOUT_MS) || 90_000;
 
 const EFFECTIVE_TPM = Math.max(1000, Math.floor(MAX_TPM * 0.85));
 const REQUEST_TOKEN_BUDGET = EFFECTIVE_TPM; // max tokens per single request
@@ -51,6 +52,7 @@ async function embedBatch(texts, estTokens) {
           Authorization: `Bearer ${process.env.VOYAGE_API_KEY}`,
         },
         body: JSON.stringify({ model: EMBEDDING_MODEL, input: texts }),
+        signal: AbortSignal.timeout(VOYAGE_TIMEOUT_MS),
       });
     } catch (err) {
       if (attempt < MAX_RETRIES) {

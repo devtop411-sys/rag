@@ -3,6 +3,8 @@ import { listTranscripts } from "./fireflies.service.js";
 import { ingestMeeting, getMeetingIngestState } from "./fireflies.ingest.js";
 
 const MAX_INGESTS_PER_RUN = Number(process.env.FIREFLIES_MAX_INGESTS_PER_RUN) || 5;
+const INGEST_TIMEOUT_MS  = Number(process.env.FIREFLIES_INGEST_TIMEOUT_MS) || 10 * 60 * 1000;
+const SYNC_HARD_TIMEOUT_MS = Number(process.env.FIREFLIES_SYNC_TIMEOUT_MS) || 25 * 60 * 1000;
 
 function domainOf(email) {
   const at = String(email || "").split("@")[1];
@@ -26,7 +28,21 @@ function passesFilters(meeting, settings) {
   return true;
 }
 
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(`${label} timed out after ${Math.round(ms / 1000)}s`);
+        reject(err);
+      }, ms);
+    }),
+  ]);
+}
+
 let progress = null;
+let runGeneration = 0;
 let runState = {
   running:     false,
   started_at:  null,
@@ -41,6 +57,27 @@ export function getSyncState() {
   return { ...runState, progress: runState.running ? progress : runState.progress };
 }
 
+function abandonStuckSync() {
+  const started = runState.started_at ? Date.parse(runState.started_at) : 0;
+  if (!runState.running || !started) return false;
+  if (Date.now() - started < SYNC_HARD_TIMEOUT_MS) return false;
+
+  console.error(
+    `[fireflies] Abandoning stuck sync (running since ${runState.started_at}, current="${progress?.current ?? "?"}")`
+  );
+  runGeneration += 1;
+  runState = {
+    running:     false,
+    started_at:  runState.started_at,
+    finished_at: new Date().toISOString(),
+    progress,
+    result:      null,
+    error:       "Sync timed out and was abandoned",
+  };
+  current = null;
+  return true;
+}
+
 /**
  * Starts a sync unless one is already in flight (single-flight, so a manual
  * "Sync now" and the scheduler can never run concurrently).
@@ -49,9 +86,12 @@ export function getSyncState() {
  */
 export function startSync(opts = {}) {
   if (runState.running) {
-    return { started: false, already_running: true, promise: current };
+    if (!abandonStuckSync()) {
+      return { started: false, already_running: true, promise: current };
+    }
   }
 
+  const myGen = ++runGeneration;
   progress  = null;
   runState  = {
     running:     true,
@@ -64,15 +104,18 @@ export function startSync(opts = {}) {
 
   current = runSync(opts)
     .then((result) => {
+      if (myGen !== runGeneration) return result;
       runState.result = result;
       return result;
     })
     .catch((err) => {
+      if (myGen !== runGeneration) return { ok: false, error: err.message };
       runState.error = err.message;
       console.error("[fireflies] sync failed:", err.message);
       return { ok: false, error: err.message };
     })
     .finally(() => {
+      if (myGen !== runGeneration) return;
       runState.running     = false;
       runState.finished_at = new Date().toISOString();
       runState.progress    = progress;
@@ -124,7 +167,11 @@ export async function runSync() {
         current: m.title,
       };
       console.log(`[fireflies] Ingesting (${ingested + 1}/${Math.min(pending.length, MAX_INGESTS_PER_RUN)}): "${m.title}"`);
-      const r = await ingestMeeting(apiKey, m.id);
+      const r = await withTimeout(
+        ingestMeeting(apiKey, m.id),
+        INGEST_TIMEOUT_MS,
+        `Ingest "${m.title}"`
+      );
       ingested += 1;
       progress = { ...progress, done: ingested, current: m.title };
       results.push({ id: m.id, title: m.title, status: "ingested", chunks: r.chunks });
@@ -133,6 +180,7 @@ export async function runSync() {
         results.push({ id: m.id, title: m.title, status: "skipped", reason: err.message });
         continue;
       }
+      console.error(`[fireflies] ingest failed "${m.title}":`, err.message);
       results.push({ id: m.id, title: m.title, status: "failed", error: err.message });
     }
   }
@@ -164,15 +212,23 @@ const BACKLOG_RETRY_MS = 5 * 60 * 1000;
 const STARTUP_DELAY_MS = 5 * 1000;
 
 async function tickScheduler() {
-  if (runState.running || Date.now() < nextRunAt) return;
+  if (runState.running) {
+    abandonStuckSync();
+    if (runState.running) return;
+  }
+  if (Date.now() < nextRunAt) return;
 
   try {
     const conn = await getConnection();
-    if (!conn.auto_sync?.enabled || conn.status !== "connected") return;
+    if (!conn.auto_sync?.enabled || conn.status !== "connected") {
+      nextRunAt = Date.now() + 60 * 1000;
+      return;
+    }
 
     const freqMs = (conn.auto_sync.frequency_minutes || 60) * 60 * 1000;
     nextRunAt = Date.now() + freqMs;
 
+    console.log(`[fireflies] Scheduled sync starting (every ${conn.auto_sync.frequency_minutes || 60}m)`);
     const result = await startSync().promise;
     const hasBacklog =
       result?.ok && ((result.deferred ?? 0) > 0 || (result.failed ?? 0) > 0);
@@ -202,7 +258,6 @@ export function startScheduler() {
     );
   }, TICK_MS);
 
-  if (typeof timer.unref === "function") timer.unref();
   console.log("[fireflies] Auto-sync scheduler started");
 }
 

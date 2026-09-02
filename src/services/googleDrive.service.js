@@ -67,20 +67,30 @@ function escapeDriveQuery(value) {
 async function driveFetch(accessToken, url) {
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(Number(process.env.DRIVE_TIMEOUT_MS) || 120_000),
   });
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     let detail = "";
     try { detail = await res.text(); } catch { /* ignore */ }
-    const expired = res.status === 401 || /invalid.?credential|authError|unauthenticated/i.test(detail);
-    if (expired) {
+    const err = new Error("Google Drive authorization expired. Please reconnect.");
+    err.status = 401;
+    err.detail = detail;
+    throw err;
+  }
+  if (res.status === 403) {
+    let detail = "";
+    try { detail = await res.text(); } catch { /* ignore */ }
+    const invalidCreds = /invalid.?credential|authError|Invalid Credentials|unauthenticated|Login Required/i.test(detail);
+    if (invalidCreds) {
       const err = new Error("Google Drive authorization expired. Please reconnect.");
       err.status = 401;
+      err.detail = detail;
       throw err;
     }
     const err = new Error(
-      `Google Drive error (${res.status}): ${detail.slice(0, 240) || res.statusText}`
+      `Google Drive error (403): ${detail.slice(0, 240) || res.statusText}`
     );
-    err.status = res.status;
+    err.status = 403;
     throw err;
   }
   if (!res.ok) {
@@ -119,7 +129,6 @@ export async function listDriveFiles(accessToken, {
     orderBy: "folder,modifiedTime desc",
     supportsAllDrives: "true",
     includeItemsFromAllDrives: "true",
-    corpora: "allDrives",
     spaces: "drive",
     q: "",
   });

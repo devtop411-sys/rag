@@ -14,9 +14,12 @@ import { DRIVE_DEFAULT_WATCH_FOLDERS } from "../config/constants.js";
 const MAX_INGESTS_PER_RUN = Number(process.env.DRIVE_MAX_INGESTS_PER_RUN) || 15;
 const MAX_PENDING_COLLECT = Number(process.env.DRIVE_MAX_PENDING_COLLECT) || 50;
 const MAX_SCAN_FILES      = Number(process.env.DRIVE_MAX_SCAN_FILES) || 5000;
+const INGEST_TIMEOUT_MS   = Number(process.env.DRIVE_INGEST_TIMEOUT_MS) || 10 * 60 * 1000;
+const SYNC_HARD_TIMEOUT_MS = Number(process.env.DRIVE_SYNC_TIMEOUT_MS) || 25 * 60 * 1000;
 
 let progress = null;
 let current  = null;
+let runGeneration = 0;
 let runState = {
   running:     false,
   started_at:  null,
@@ -30,6 +33,39 @@ export function getSyncState() {
   return { ...runState, progress: runState.running ? progress : runState.progress };
 }
 
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`));
+      }, ms);
+    }),
+  ]);
+}
+
+function abandonStuckSync() {
+  const started = runState.started_at ? Date.parse(runState.started_at) : 0;
+  if (!runState.running || !started) return false;
+  if (Date.now() - started < SYNC_HARD_TIMEOUT_MS) return false;
+
+  console.error(
+    `[drive] Abandoning stuck sync (running since ${runState.started_at}, current="${progress?.current ?? "?"}")`
+  );
+  runGeneration += 1;
+  runState = {
+    running:     false,
+    started_at:  runState.started_at,
+    finished_at: new Date().toISOString(),
+    progress,
+    result:      null,
+    error:       "Sync timed out and was abandoned",
+  };
+  current = null;
+  return true;
+}
+
 /**
  * Starts a sync unless one is already in flight, so a manual "Sync now" and the
  * scheduler can never run concurrently.
@@ -38,9 +74,12 @@ export function getSyncState() {
  */
 export function startSync() {
   if (runState.running) {
-    return { started: false, already_running: true, promise: current };
+    if (!abandonStuckSync()) {
+      return { started: false, already_running: true, promise: current };
+    }
   }
 
+  const myGen = ++runGeneration;
   progress = null;
   runState = {
     running:     true,
@@ -53,15 +92,18 @@ export function startSync() {
 
   current = runSync()
     .then((result) => {
+      if (myGen !== runGeneration) return result;
       runState.result = result;
       return result;
     })
     .catch((err) => {
+      if (myGen !== runGeneration) return { ok: false, error: err.message };
       runState.error = err.message;
       console.error("[drive] sync failed:", err.message);
       return { ok: false, error: err.message };
     })
     .finally(() => {
+      if (myGen !== runGeneration) return;
       runState.running     = false;
       runState.finished_at = new Date().toISOString();
       runState.progress    = progress;
@@ -223,7 +265,11 @@ export async function runSync() {
     attempts += 1;
     try {
       console.log(`[drive] Auto-ingest (${attempts}/${total}): "${file.name}" (${file._reason})`);
-      const r = await ingestDriveFile(accessToken, file.id);
+      const r = await withTimeout(
+        ingestDriveFile(accessToken, file.id),
+        INGEST_TIMEOUT_MS,
+        `Ingest "${file.name}"`
+      );
       ingested += 1;
       progress = { ...progress, done: ingested };
       results.push({
@@ -302,15 +348,23 @@ const STARTUP_DELAY_MS = 8 * 1000;
 const TICK_MS          = 60 * 1000;
 
 async function tickScheduler() {
-  if (runState.running || Date.now() < nextRunAt) return;
+  if (runState.running) {
+    abandonStuckSync();
+    if (runState.running) return;
+  }
+  if (Date.now() < nextRunAt) return;
 
   try {
     const conn = await getConnection();
-    if (!conn.auto_sync?.enabled || !hasLiveToken(conn)) return;
+    if (!conn.auto_sync?.enabled || !hasLiveToken(conn)) {
+      nextRunAt = Date.now() + 60 * 1000;
+      return;
+    }
 
     const freqMs = (conn.auto_sync.frequency_minutes || 6 * 60) * 60 * 1000;
     nextRunAt = Date.now() + freqMs;
 
+    console.log(`[drive] Scheduled sync starting (every ${conn.auto_sync.frequency_minutes || 6 * 60}m)`);
     const result = await startSync().promise;
     const hasBacklog =
       result?.ok && ((result.deferred ?? 0) > 0 || (result.failed ?? 0) > 0 || result.truncated);
@@ -341,7 +395,6 @@ export function startScheduler() {
     );
   }, TICK_MS);
 
-  if (typeof timer.unref === "function") timer.unref();
   console.log("[drive] Auto-ingest scheduler started");
 }
 

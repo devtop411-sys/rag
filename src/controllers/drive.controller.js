@@ -93,9 +93,6 @@ export async function connect(req, res) {
       return res.json(publicConnection(ready));
     }
 
-    if (conn.auto_sync?.enabled) {
-      startSync();
-    }
     res.json(publicConnection(conn));
   } catch (err) {
     console.error("[drive/connect] error:", err.message);

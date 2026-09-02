@@ -4,9 +4,16 @@ import {
   getAccessToken,
   hasLiveToken,
 } from "./drive.state.js";
-import { listAllIngestibleFiles } from "./googleDrive.service.js";
+import {
+  FOLDER_MIME,
+  listDriveFiles,
+} from "./googleDrive.service.js";
 import { ingestDriveFile, getDriveIngestedMeta } from "./drive.ingest.js";
 import { DRIVE_DEFAULT_WATCH_FOLDERS } from "../config/constants.js";
+
+const MAX_INGESTS_PER_RUN = Number(process.env.DRIVE_MAX_INGESTS_PER_RUN) || 15;
+const MAX_PENDING_COLLECT = Number(process.env.DRIVE_MAX_PENDING_COLLECT) || 50;
+const MAX_SCAN_FILES      = Number(process.env.DRIVE_MAX_SCAN_FILES) || 5000;
 
 let progress = null;
 let current  = null;
@@ -64,6 +71,97 @@ export function startSync() {
   return { started: true, already_running: false, promise: current };
 }
 
+async function collectPending(accessToken, folders, conn) {
+  const unusable = new Map(
+    (conn.unusable_files ?? []).map((f) => [f.id, f])
+  );
+
+  const pending = [];
+  let alreadyIngested = 0;
+  let knownUnusable   = 0;
+  let scanned         = 0;
+  let hitScanCap      = false;
+  const seenFolders   = new Set();
+  const seenFiles     = new Set();
+
+  async function consider(file) {
+    if (seenFiles.has(file.id)) return;
+    seenFiles.add(file.id);
+    scanned += 1;
+    if (scanned > MAX_SCAN_FILES) {
+      hitScanCap = true;
+      return;
+    }
+
+    const previouslyUnusable = unusable.get(file.id);
+    if (previouslyUnusable && previouslyUnusable.modified_time === (file.modifiedTime ?? null)) {
+      knownUnusable += 1;
+      return;
+    }
+
+    const state = await getDriveIngestedMeta(file.id);
+    if (!state.ingested) {
+      pending.push({ ...file, _reason: "new" });
+      return;
+    }
+
+    const changed =
+      conn.auto_sync.reingest_modified &&
+      file.modifiedTime &&
+      state.modifiedTime &&
+      file.modifiedTime !== state.modifiedTime;
+    if (changed) pending.push({ ...file, _reason: "modified" });
+    else alreadyIngested += 1;
+  }
+
+  async function walk(folderId) {
+    if (seenFolders.has(folderId)) return;
+    seenFolders.add(folderId);
+    if (pending.length >= MAX_PENDING_COLLECT || hitScanCap) return;
+
+    let pageToken;
+    do {
+      const data = await listDriveFiles(accessToken, {
+        folderId,
+        pageToken,
+        pageSize: 100,
+      });
+
+      const subFolders = [];
+      for (const file of data.files ?? []) {
+        if (file.mimeType === FOLDER_MIME) {
+          subFolders.push(file.id);
+          continue;
+        }
+        await consider(file);
+        if (pending.length >= MAX_PENDING_COLLECT || hitScanCap) break;
+      }
+
+      for (const id of subFolders) {
+        if (pending.length >= MAX_PENDING_COLLECT || hitScanCap) break;
+        await walk(id);
+      }
+
+      pageToken = data.nextPageToken;
+    } while (pageToken && pending.length < MAX_PENDING_COLLECT && !hitScanCap);
+  }
+
+  for (const folder of folders) {
+    if (pending.length >= MAX_PENDING_COLLECT || hitScanCap) break;
+    await walk(folder.id);
+  }
+
+  return {
+    pending,
+    alreadyIngested,
+    knownUnusable,
+    scanned,
+    truncated: hitScanCap || pending.length >= MAX_PENDING_COLLECT,
+    maxFiles: MAX_SCAN_FILES,
+    unusable,
+  };
+}
+
 /**
  * Scans the watched folder and ingests everything that is not in Qdrant yet
  * (plus files whose Drive copy changed since ingest, when enabled).
@@ -79,37 +177,15 @@ export async function runSync() {
     ? conn.watch_folders
     : DRIVE_DEFAULT_WATCH_FOLDERS;
 
-  const { files, truncated, maxFiles } = await listAllIngestibleFiles(accessToken, {
-    folderIds: folders.map((f) => f.id),
-  });
-
-  const unusable = new Map(
-    (conn.unusable_files ?? []).map((f) => [f.id, f])
-  );
-
-  const pending = [];
-  let alreadyIngested = 0;
-  let knownUnusable   = 0;
-  for (const file of files) {
-    const previouslyUnusable = unusable.get(file.id);
-    if (previouslyUnusable && previouslyUnusable.modified_time === (file.modifiedTime ?? null)) {
-      knownUnusable += 1;
-      continue;
-    }
-
-    const state = await getDriveIngestedMeta(file.id);
-    if (!state.ingested) {
-      pending.push({ ...file, _reason: "new" });
-      continue;
-    }
-    const changed =
-      conn.auto_sync.reingest_modified &&
-      file.modifiedTime &&
-      state.modifiedTime &&
-      file.modifiedTime !== state.modifiedTime;
-    if (changed) pending.push({ ...file, _reason: "modified" });
-    else alreadyIngested += 1;
-  }
+  const {
+    pending,
+    alreadyIngested,
+    knownUnusable,
+    scanned,
+    truncated,
+    maxFiles,
+    unusable,
+  } = await collectPending(accessToken, folders, conn);
 
   const results   = [];
   let ingested    = 0;
@@ -119,9 +195,16 @@ export async function runSync() {
   let attempts    = 0;
   let authExpired = false;
   const newlyUnusable = [];
-  const total     = pending.length;
+  const toIngest = pending.slice(0, MAX_INGESTS_PER_RUN);
+  deferred = Math.max(0, pending.length - toIngest.length);
+  for (let i = 0; i < deferred; i++) {
+    const file = pending[MAX_INGESTS_PER_RUN + i];
+    results.push({ id: file.id, name: file.name, status: "deferred" });
+  }
 
-  for (const file of pending) {
+  const total = toIngest.length;
+
+  for (const file of toIngest) {
     if (authExpired) {
       deferred += 1;
       results.push({ id: file.id, name: file.name, status: "deferred" });
@@ -149,7 +232,7 @@ export async function runSync() {
         authExpired = true;
         deferred += 1;
         console.warn(
-          `[drive] Authorization expired mid-run — ${pending.length - attempts + 1} file(s) deferred`
+          `[drive] Authorization expired mid-run — ${toIngest.length - attempts + 1} file(s) deferred`
         );
         results.push({
           id: file.id, name: file.name, status: "deferred", reason: "authorization expired",
@@ -187,7 +270,7 @@ export async function runSync() {
   console.log(
     `[drive] Sync complete — ingested ${ingested}, skipped ${skipped}, failed ${failed}, ` +
     `deferred ${deferred}, up-to-date ${alreadyIngested}, previously skipped ${knownUnusable}, ` +
-    `scanned ${files.length} across ${folders.map((f) => f.name).join(" + ")}`
+    `scanned ${scanned} across ${folders.map((f) => f.name).join(" + ")}`
   );
 
   return {
@@ -200,7 +283,7 @@ export async function runSync() {
     auth_expired:    authExpired,
     up_to_date:      alreadyIngested,
     known_unusable:  knownUnusable,
-    scanned:         files.length,
+    scanned,
     truncated,
     maxFiles,
     results,
@@ -228,7 +311,7 @@ async function tickScheduler() {
 
     const result = await startSync().promise;
     const hasBacklog =
-      result?.ok && ((result.deferred ?? 0) > 0 || (result.failed ?? 0) > 0);
+      result?.ok && ((result.deferred ?? 0) > 0 || (result.failed ?? 0) > 0 || result.truncated);
     if (hasBacklog) {
       nextRunAt = Date.now() + Math.min(BACKLOG_RETRY_MS, freqMs);
     } else if (!result?.ok) {

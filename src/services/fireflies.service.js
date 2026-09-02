@@ -108,7 +108,7 @@ export function normalizeMeeting(t) {
     title:        t.title || "Untitled meeting",
     date:         typeof t.date === "number" ? t.date : null,
     date_string:  t.dateString || (t.date ? new Date(t.date).toISOString() : null),
-    duration:     t.duration || 0, // seconds
+    duration:     t.duration || 0,
     organizer:    t.organizer_email || t.host_email || null,
     participants: Array.isArray(t.participants) ? t.participants : [],
     meeting_url:  t.transcript_url || null,

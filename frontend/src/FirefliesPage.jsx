@@ -5,8 +5,8 @@ const API_KEY     = import.meta.env.VITE_API_KEY ?? "";
 const authHeaders = API_KEY ? { "x-api-key": API_KEY } : {};
 const jsonHeaders = { "Content-Type": "application/json", ...authHeaders };
 
-function formatDuration(seconds) {
-  const mins = Math.round((seconds || 0) / 60);
+function formatDuration(minutes) {
+  const mins = Math.round(minutes || 0);
   return `${mins} min`;
 }
 
@@ -181,11 +181,10 @@ export default function FirefliesPage() {
 
         if (sync.error) throw new Error(sync.error);
         const r = sync.result ?? {};
-        summary = r.initialized
-          ? "Sync baseline set — new meetings from now on will auto-ingest."
-          : `Sync complete — ingested ${r.ingested ?? 0} meeting(s)` +
-            (r.deferred ? `, ${r.deferred} queued for the next run` : "") +
-            (r.failed ? `, ${r.failed} failed` : "") + ".";
+        summary =
+          `Sync complete — ingested ${r.ingested ?? 0} meeting(s)` +
+          (r.deferred ? `, ${r.deferred} queued for the next run` : "") +
+          (r.failed ? `, ${r.failed} failed` : "") + ".";
         break;
       }
 

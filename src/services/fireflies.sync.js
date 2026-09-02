@@ -19,7 +19,7 @@ function isExternal(meeting) {
 
 function passesFilters(meeting, settings) {
   if (settings.min_duration_minutes) {
-    const minutes = (meeting.duration || 0) / 60;
+    const minutes = meeting.duration || 0;
     if (minutes < settings.min_duration_minutes) return false;
   }
   if (settings.only_external && !isExternal(meeting)) return false;
@@ -82,7 +82,7 @@ export function startSync(opts = {}) {
   return { started: true, already_running: false, promise: current };
 }
 
-export async function runSync({ force = false } = {}) {
+export async function runSync() {
   const conn = await getConnection();
   const apiKey = await getApiKey();
 
@@ -91,25 +91,12 @@ export async function runSync({ force = false } = {}) {
   }
 
   const settings = conn.auto_sync;
-  const cursorMs = conn.last_synced_at ? Date.parse(conn.last_synced_at) : null;
-
-  if (cursorMs == null && !force) {
-    const now = new Date().toISOString();
-    await saveConnection({ last_synced_at: now });
-    return { ok: true, initialized: true, ingested: 0, checked: 0, results: [] };
-  }
-
   const meetings = await listTranscripts(apiKey, { limit: 50 });
-
-  const afterCursor = meetings
-    .filter((m) => {
-      if (cursorMs != null && m.date != null && m.date <= cursorMs) return false;
-      return passesFilters(m, settings);
-    });
+  const eligible = meetings.filter((m) => passesFilters(m, settings));
 
   const pending = [];
   const already = [];
-  for (const m of afterCursor) {
+  for (const m of eligible) {
     const state = await getMeetingIngestState(m.id);
     if (state.ingested) already.push(m);
     else pending.push(m);
@@ -121,22 +108,10 @@ export async function runSync({ force = false } = {}) {
   }));
   let ingested = 0;
   let deferred = 0;
-  let maxDate = cursorMs || 0;
-  for (const m of afterCursor) {
-    if (m.date && m.date > maxDate) maxDate = m.date;
-  }
-
-  let earliestPendingDate = null;
-  const holdCursor = (m) => {
-    if (m.date != null && (earliestPendingDate == null || m.date < earliestPendingDate)) {
-      earliestPendingDate = m.date;
-    }
-  };
 
   for (const m of pending) {
     if (ingested >= MAX_INGESTS_PER_RUN) {
       deferred += 1;
-      holdCursor(m);
       results.push({ id: m.id, title: m.title, status: "deferred" });
       continue;
     }
@@ -158,29 +133,23 @@ export async function runSync({ force = false } = {}) {
         results.push({ id: m.id, title: m.title, status: "skipped", reason: err.message });
         continue;
       }
-      holdCursor(m);
       results.push({ id: m.id, title: m.title, status: "failed", error: err.message });
     }
   }
 
-  let nextCursorMs = Math.max(maxDate, Date.now());
-  if (earliestPendingDate != null) {
-    nextCursorMs = Math.min(nextCursorMs, earliestPendingDate - 1);
-  }
-  if (cursorMs != null) nextCursorMs = Math.max(nextCursorMs, cursorMs); // never rewind
-  const nextCursor = new Date(nextCursorMs).toISOString();
+  const nextCursor = new Date().toISOString();
   await saveConnection({ last_synced_at: nextCursor });
 
   const failed = results.filter((r) => r.status === "failed").length;
   console.log(
-    `[fireflies] Sync complete — ingested ${ingested}, deferred ${deferred}, failed ${failed}, pending ${pending.length}, after-cursor ${afterCursor.length}`
+    `[fireflies] Sync complete — ingested ${ingested}, deferred ${deferred}, failed ${failed}, pending ${pending.length}, eligible ${eligible.length}`
   );
   return {
     ok: true,
     ingested,
     deferred,
     failed,
-    checked: afterCursor.length,
+    checked: eligible.length,
     pending: pending.length,
     results,
     last_synced_at: nextCursor,

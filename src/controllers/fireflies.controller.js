@@ -175,7 +175,14 @@ export async function updateSettings(req, res) {
     if (typeof incoming.only_external === "boolean") patch.only_external = incoming.only_external;
     if (Number.isFinite(+incoming.min_duration_minutes)) patch.min_duration_minutes = +incoming.min_duration_minutes;
 
+    const before = await getConnection();
     const conn = await saveConnection({ auto_sync: patch });
+
+    const justEnabled = !before.auto_sync?.enabled && !!conn.auto_sync?.enabled;
+    if (justEnabled && conn.status === "connected") {
+      startSync();
+    }
+
     res.json({ auto_sync: conn.auto_sync });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -190,7 +197,7 @@ export async function sync(req, res) {
       return res.status(400).json({ ok: false, reason: "not_connected" });
     }
 
-    const { started, already_running } = startSync({ force: true });
+    const { started, already_running } = startSync();
     res.status(202).json({ ok: true, started, already_running, sync: getSyncState() });
   } catch (err) {
     res.status(500).json({ error: err.message });

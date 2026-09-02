@@ -85,12 +85,16 @@ export async function connect(req, res) {
     const resumed = !hasLiveToken(previous);
     if (resumed) {
       console.log(`[drive] Connected as ${account?.email ?? conn.account?.email ?? "unknown account"}`);
-  
+
       const ready = conn.auto_sync?.enabled
         ? conn
         : await saveConnection({ auto_sync: { enabled: true } });
       startSync();
       return res.json(publicConnection(ready));
+    }
+
+    if (conn.auto_sync?.enabled) {
+      startSync();
     }
     res.json(publicConnection(conn));
   } catch (err) {
@@ -252,7 +256,14 @@ export async function updateSettings(req, res) {
       update.watch_folders = await resolveWatchFolders(req, requested);
     }
 
+    const before = await getConnection();
     const conn = await saveConnection(update);
+
+    const justEnabled = !before.auto_sync?.enabled && !!conn.auto_sync?.enabled;
+    if (justEnabled && hasLiveToken(conn)) {
+      startSync();
+    }
+
     res.json({ auto_sync: conn.auto_sync, watch_folders: conn.watch_folders });
   } catch (err) {
     console.error("[drive/settings] error:", err.message);

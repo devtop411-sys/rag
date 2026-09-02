@@ -128,18 +128,20 @@ async function collectPending(accessToken, folders, conn) {
       });
 
       const subFolders = [];
+      const ingestible = [];
       for (const file of data.files ?? []) {
-        if (file.mimeType === FOLDER_MIME) {
-          subFolders.push(file.id);
-          continue;
-        }
-        await consider(file);
-        if (pending.length >= MAX_PENDING_COLLECT || hitScanCap) break;
+        if (file.mimeType === FOLDER_MIME) subFolders.push(file.id);
+        else ingestible.push(file);
       }
 
       for (const id of subFolders) {
         if (pending.length >= MAX_PENDING_COLLECT || hitScanCap) break;
         await walk(id);
+      }
+
+      for (const file of ingestible) {
+        if (pending.length >= MAX_PENDING_COLLECT || hitScanCap) break;
+        await consider(file);
       }
 
       pageToken = data.nextPageToken;

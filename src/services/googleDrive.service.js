@@ -119,6 +119,7 @@ export async function listDriveFiles(accessToken, {
     orderBy: "folder,modifiedTime desc",
     supportsAllDrives: "true",
     includeItemsFromAllDrives: "true",
+    corpora: "allDrives",
     spaces: "drive",
     q: "",
   });
@@ -168,9 +169,9 @@ export async function listAllIngestibleFiles(accessToken, {
   const seenFiles   = new Set();
 
   async function walk(currentFolderId) {
-    // Shortcuts can point back up the tree, so guard against cycles.
     if (seenFolders.has(currentFolderId)) return;
     seenFolders.add(currentFolderId);
+    if (files.length >= maxFiles) return;
 
     let pageToken;
     do {
@@ -181,17 +182,22 @@ export async function listAllIngestibleFiles(accessToken, {
       });
 
       const subFolders = [];
+      const ingestible = [];
       for (const file of data.files ?? []) {
         if (file.mimeType === FOLDER_MIME) subFolders.push(file.id);
-        else if (files.length < maxFiles && !seenFiles.has(file.id)) {
-          seenFiles.add(file.id);
-          files.push(file);
-        }
+        else ingestible.push(file);
       }
 
       for (const id of subFolders) {
         if (files.length >= maxFiles) break;
         await walk(id);
+      }
+
+      for (const file of ingestible) {
+        if (files.length >= maxFiles) break;
+        if (seenFiles.has(file.id)) continue;
+        seenFiles.add(file.id);
+        files.push(file);
       }
 
       pageToken = data.nextPageToken;

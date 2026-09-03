@@ -77,21 +77,17 @@ jobs:
             echo "OAUTH_SIGNING_SECRET=$OAUTH_SIGNING_SECRET"   >> .env
 
             # Ports offset by 10 so both envs run on the same EC2
-            echo "PORT=3011"           >> .env
-            echo "MCP_PORT=3012"       >> .env
-            echo "FRONTEND_PORT=8090"  >> .env
+            echo "PORT=3011"      >> .env
+            echo "MCP_PORT=3012"  >> .env
 
-            # Start dev containers (separate compose project name = no collision)
+            # Stop dev containers (separate project = no collision with prod)
             COMPOSE_PROJECT_NAME=rag-dev \
-              docker compose \
-                -f docker-compose.yml \
-                -f docker-compose.dev.yml \
-              down || true
+              docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+              down --remove-orphans || true
 
+            # Start dev containers
             COMPOSE_PROJECT_NAME=rag-dev \
-              docker compose \
-                -f docker-compose.yml \
-                -f docker-compose.dev.yml \
+              docker compose -f docker-compose.yml -f docker-compose.dev.yml \
               up -d --build --remove-orphans
 
             docker image prune -af

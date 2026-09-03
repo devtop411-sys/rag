@@ -13,7 +13,7 @@ import { ALLOWED_DOMAIN } from "../config/constants.js";
 
 const ACCESS_TTL = Number(process.env.OAUTH_ACCESS_TTL || 3600); // seconds
 const REFRESH_TTL = Number(process.env.OAUTH_REFRESH_TTL || 60 * 60 * 24 * 30);
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || process.env.MCP_GOOGLE_CLIENT_ID || "";
 
 let signingSecret = process.env.OAUTH_SIGNING_SECRET;
 const EPHEMERAL_KEY = !signingSecret;

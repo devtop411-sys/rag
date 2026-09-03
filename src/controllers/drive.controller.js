@@ -14,10 +14,11 @@ import { getDriveIngestState, ingestDriveFiles } from "../services/drive.ingest.
 import {
   getConnection,
   saveConnection,
-  saveAccessToken,
+  saveOAuthTokens,
   clearAccessToken,
   getAccessToken,
-  hasLiveToken,
+  exchangeCodeForTokens,
+  isConnected,
   publicConnection,
 } from "../services/drive.state.js";
 import { startSync, getSyncState } from "../services/drive.sync.js";
@@ -25,13 +26,6 @@ import { startSync, getSyncState } from "../services/drive.sync.js";
 function sendError(res, err, fallbackStatus = 500) {
   const status = err.status && err.status < 600 ? err.status : fallbackStatus;
   res.status(status).json({ error: err.message });
-}
-
-
-async function requestAccessToken(req) {
-  const header = (req.get("x-google-access-token") || "").trim();
-  if (header) return header;
-  return getAccessToken();
 }
 
 function publicFile(file, state = { ingested: false, chunks: 0 }) {
@@ -62,38 +56,46 @@ export async function status(req, res) {
 
 export async function connect(req, res) {
   try {
-    const accessToken = (req.body?.access_token || "").toString().trim();
-    const expiresIn   = req.body?.expires_in;
-    if (!accessToken) {
-      return res.status(400).json({ error: "access_token is required" });
+    const code = (req.body?.code || "").toString().trim();
+    if (!code) {
+      return res.status(400).json({
+        error: "Authorization code is required. Reconnect Google Drive from the UI.",
+      });
     }
 
     const previous = await getConnection();
-    // Skip the extra Drive round trip on token renewals.
+    const tokens = await exchangeCodeForTokens(code);
+
     let account = previous.account;
-    if (!account) {
-      try {
-        account = await getDriveAccount(accessToken);
-      } catch (err) {
-        console.error("[drive/connect] could not read account info:", err.message);
-        account = null;
-      }
+    try {
+      account = await getDriveAccount(tokens.access_token);
+    } catch (err) {
+      console.error("[drive/connect] could not read account info:", err.message);
     }
 
-    const conn = await saveAccessToken({ accessToken, expiresIn, account });
-
-    const resumed = !hasLiveToken(previous);
-    if (resumed) {
-      console.log(`[drive] Connected as ${account?.email ?? conn.account?.email ?? "unknown account"}`);
-
-      const ready = conn.auto_sync?.enabled
-        ? conn
-        : await saveConnection({ auto_sync: { enabled: true } });
-      startSync();
-      return res.json(publicConnection(ready));
+    if (!tokens.refresh_token && !previous.refresh_token) {
+      return res.status(400).json({
+        error:
+          "Google did not return a refresh token. Revoke app access at " +
+          "https://myaccount.google.com/permissions then connect again, " +
+          "and ensure the OAuth client has a Client Secret configured.",
+      });
     }
 
-    res.json(publicConnection(conn));
+    const conn = await saveOAuthTokens({
+      accessToken:  tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresIn:    tokens.expires_in,
+      account,
+    });
+
+    console.log(`[drive] Connected as ${account?.email ?? "unknown account"} (refresh token stored)`);
+
+    const ready = conn.auto_sync?.enabled
+      ? conn
+      : await saveConnection({ auto_sync: { enabled: true } });
+    startSync();
+    res.json(publicConnection(ready));
   } catch (err) {
     console.error("[drive/connect] error:", err.message);
     sendError(res, err, 400);
@@ -102,7 +104,6 @@ export async function connect(req, res) {
 
 export async function disconnect(req, res) {
   try {
-   
     const conn = await clearAccessToken();
     res.json(publicConnection(conn));
   } catch (err) {
@@ -112,7 +113,7 @@ export async function disconnect(req, res) {
 
 export async function files(req, res) {
   try {
-    const accessToken = await requestAccessToken(req);
+    const accessToken = await getAccessToken();
 
     const folderId  = (req.query.folderId || "root").toString();
     const search    = (req.query.search || "").toString();
@@ -145,7 +146,7 @@ export async function files(req, res) {
 
 export async function listAll(req, res) {
   try {
-    const accessToken = await requestAccessToken(req);
+    const accessToken = await getAccessToken();
 
     const folderId     = (req.query.folderId || "root").toString();
     const skipIngested = req.query.skipIngested !== "0";
@@ -175,7 +176,7 @@ export async function listAll(req, res) {
 
 export async function ingest(req, res) {
   try {
-    const accessToken = await requestAccessToken(req);
+    const accessToken = await getAccessToken();
 
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
     if (!ids.length) return res.status(400).json({ error: "ids array is required" });
@@ -216,7 +217,7 @@ async function resolveWatchFolders(req, requested) {
       continue;
     }
 
-    accessToken ??= await requestAccessToken(req);
+    accessToken ??= await getAccessToken();
     const meta = await getDriveFileMeta(accessToken, entry.id);
     if (meta.mimeType !== FOLDER_MIME) {
       const err = new Error(`"${meta.name}" is not a folder`);
@@ -257,7 +258,7 @@ export async function updateSettings(req, res) {
     const conn = await saveConnection(update);
 
     const justEnabled = !before.auto_sync?.enabled && !!conn.auto_sync?.enabled;
-    if (justEnabled && hasLiveToken(conn)) {
+    if (justEnabled && isConnected(conn)) {
       startSync();
     }
 
@@ -271,7 +272,7 @@ export async function updateSettings(req, res) {
 export async function sync(req, res) {
   try {
     const conn = await getConnection();
-    if (!hasLiveToken(conn)) {
+    if (!isConnected(conn)) {
       return res.status(400).json({ ok: false, reason: "not_connected" });
     }
 

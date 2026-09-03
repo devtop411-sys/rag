@@ -18,7 +18,8 @@ export async function verifyGoogleCredential(credential) {
 
   const payload = await r.json();
 
-  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientId =
+    process.env.GOOGLE_CLIENT_ID || process.env.MCP_GOOGLE_CLIENT_ID || "";
   if (clientId && payload.aud !== clientId) {
     const err = new Error("Token audience mismatch");
     err.status = 401;

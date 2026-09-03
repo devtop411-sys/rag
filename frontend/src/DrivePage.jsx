@@ -57,8 +57,8 @@ export default function DrivePage() {
 
 function DrivePageInner() {
   const {
-    live, renewing, authError,
-    connect, disconnect, renew, driveHeaders,
+    connecting, authError, setAuthError,
+    connect, disconnect, connection,
   } = useDriveAuth();
   const [conn, setConn]           = useState(null);
   const [settings, setSettings]   = useState(DEFAULT_SETTINGS);
@@ -73,7 +73,7 @@ function DrivePageInner() {
   const [error, setError]         = useState("");
   const [notice, setNotice]       = useState("");
 
-  const connected     = live || Boolean(conn?.connected);
+  const connected     = Boolean(conn?.connected || connection?.connected);
   const folderId      = path[path.length - 1]?.id ?? "root";
   const currentFolder = path[path.length - 1] ?? ROOTS[0];
   const activeRootId  = path[0]?.id ?? "root";
@@ -98,8 +98,13 @@ function DrivePageInner() {
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
   useEffect(() => {
-    if (live) loadStatus();
-  }, [live, loadStatus]);
+    if (connection?.connected) {
+      setConn((prev) => ({ ...(prev ?? {}), ...connection }));
+      setSettings({ ...DEFAULT_SETTINGS, ...connection.auto_sync });
+      setAuthError("");
+      setNotice("Google Drive connected. Auto-ingest can run in the background.");
+    }
+  }, [connection, setAuthError]);
 
   async function handleDisconnect() {
     if (!confirm("Disconnect Google Drive? Ingested files stay in the knowledge base.")) return;
@@ -130,30 +135,28 @@ function DrivePageInner() {
       if (nextPage) params.set("pageToken", nextPage);
 
       const res  = await fetch(`${API_BASE}/api/drive/files?${params}`, {
-        headers: driveHeaders(authHeaders),
+        headers: authHeaders,
       });
       const data = await res.json();
       if (res.status === 401) {
-        renew();
-        setNotice("Refreshing Google Drive sign-in…");
-        return;
+        setConn((c) => ({ ...(c ?? {}), connected: false }));
+        throw new Error(data.error ?? "Google Drive is not connected. Please reconnect.");
       }
       if (!res.ok) throw new Error(data.error ?? "Failed to load Drive files");
 
       setFiles(data.files ?? []);
       setNextPageToken(data.nextPageToken ?? null);
       setSelected(new Set());
-      setNotice("");
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy("");
     }
-  }, [folderId, search, driveHeaders, renew]);
+  }, [folderId, search]);
 
   useEffect(() => {
     if (connected) loadFiles({ pageToken: pageTokens[pageIndex] ?? "" });
-  }, [connected, folderId, pageIndex, live]);
+  }, [connected, folderId, pageIndex]);
 
   function resetBrowsing() {
     setSearch("");
@@ -212,7 +215,7 @@ function DrivePageInner() {
     try {
       const res  = await fetch(`${API_BASE}/api/drive/settings`, {
         method:  "PUT",
-        headers: driveHeaders(jsonHeaders),
+        headers: jsonHeaders,
         body:    JSON.stringify({ auto_sync: settings, ...overrides }),
       });
       const data = await res.json();
@@ -247,14 +250,13 @@ function DrivePageInner() {
     setNotice("");
     try {
       const res  = await fetch(`${API_BASE}/api/drive/sync`, {
-        method: "POST", headers: driveHeaders(jsonHeaders),
+        method: "POST", headers: jsonHeaders,
       });
       const data = await res.json();
       if (!res.ok) {
         if (data.reason === "not_connected") {
-          renew();
-          setNotice("Refreshing Google Drive sign-in…");
-          return;
+          setConn((c) => ({ ...(c ?? {}), connected: false }));
+          throw new Error("Google Drive is not connected. Please reconnect.");
         }
         throw new Error(data.error ?? "Sync failed");
       }
@@ -312,17 +314,13 @@ function DrivePageInner() {
     try {
       const res  = await fetch(`${API_BASE}/api/drive/ingest`, {
         method:  "POST",
-        headers: driveHeaders(jsonHeaders),
+        headers: jsonHeaders,
         body:    JSON.stringify({ ids }),
       });
       const data = await res.json();
       if (res.status === 401) {
-        renew();
-        setNotice("Refreshing Google Drive sign-in…");
-        setFiles((prev) =>
-          prev.map((f) => ids.includes(f.id) ? { ...f, _status: undefined } : f)
-        );
-        return;
+        setConn((c) => ({ ...(c ?? {}), connected: false }));
+        throw new Error(data.error ?? "Google Drive is not connected. Please reconnect.");
       }
       if (!res.ok) throw new Error(data.error ?? "Ingest failed");
 
@@ -398,14 +396,14 @@ function DrivePageInner() {
             <div>
               <strong>Google Drive</strong>
               <p className="fm-meta" style={{ margin: "4px 0 0" }}>
-                {renewing
-                  ? "Refreshing the Google Drive session so auto-ingest can continue…"
-                  : "Connect your Google account to browse Drive files and ingest them into the knowledge base. PDFs, Docs, Sheets, Slides, Word, Markdown, and text files are supported."}
+                {connecting
+                  ? "Connecting to Google Drive…"
+                  : "Connect once — the server stores a refresh token so auto-ingest keeps working without reopening this page."}
               </p>
             </div>
             <div>
-              <button className="btn btn--primary" onClick={() => connect()} disabled={renewing}>
-                {renewing ? "Reconnecting…" : "Connect Google Drive"}
+              <button className="btn btn--primary" onClick={() => connect()} disabled={connecting || busy === "connect"}>
+                {connecting ? "Connecting…" : "Connect Google Drive"}
               </button>
             </div>
           </div>
@@ -504,9 +502,8 @@ function DrivePageInner() {
             Re-ingest files that changed in Drive
           </label>
           <span className="fm-meta">
-            Auto-ingest stays signed in while any page of this app is open, and
-            it refreshes the Google session on its own. If the browser is closed
-            overnight, reopen the app — missed files are picked up automatically.
+            After you connect once, the server refreshes Google access on its own.
+            Auto-ingest keeps running even when nobody has this page open.
           </span>
           <div>
             <button

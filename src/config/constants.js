@@ -106,5 +106,15 @@ export const DRIVE_DEFAULT_WATCH_FOLDERS = [
   { id: "sharedWithMe", name: "Shared with me" },
 ];
 
+export const GOOGLE_CLIENT_ID =
+  process.env.GOOGLE_CLIENT_ID ||
+  process.env.MCP_GOOGLE_CLIENT_ID ||
+  "";
+
+export const GOOGLE_CLIENT_SECRET =
+  process.env.GOOGLE_CLIENT_SECRET ||
+  process.env.MCP_GOOGLE_CLIENT_SECRET ||
+  "";
+
 export const ALLOWED_DOMAIN  = "collider.vc";
 export const ALLOWED_EMAILS  = new Set(["devtop411@gmail.com"]);

@@ -2,7 +2,7 @@ import {
   getConnection,
   saveConnection,
   getAccessToken,
-  hasLiveToken,
+  isConnected,
 } from "./drive.state.js";
 import {
   FOLDER_MIME,
@@ -212,7 +212,7 @@ async function collectPending(accessToken, folders, conn) {
  */
 export async function runSync() {
   const conn = await getConnection();
-  if (!hasLiveToken(conn)) {
+  if (!isConnected(conn)) {
     return { ok: false, reason: "not_connected" };
   }
 
@@ -356,7 +356,7 @@ async function tickScheduler() {
 
   try {
     const conn = await getConnection();
-    if (!conn.auto_sync?.enabled || !hasLiveToken(conn)) {
+    if (!conn.auto_sync?.enabled || !isConnected(conn)) {
       nextRunAt = Date.now() + 60 * 1000;
       return;
     }

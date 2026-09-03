@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useState } from "react";
 import { useGoogleLogin } from "@react-oauth/google";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
@@ -11,12 +11,6 @@ const jsonHeaders = {
 
 export const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
-const TOKEN_KEY = "collider_drive_token";
-const EXP_KEY   = "collider_drive_exp";
-
-const RENEW_LEAD_MS  = 5 * 60 * 1000;
-const RENEW_RETRY_MS = 5 * 60 * 1000;
-
 const DriveAuthContext = createContext(null);
 
 export function useDriveAuth() {
@@ -25,200 +19,84 @@ export function useDriveAuth() {
   return ctx;
 }
 
-function readStored() {
-  try {
-    let token = localStorage.getItem(TOKEN_KEY) || "";
-    let exp   = Number(localStorage.getItem(EXP_KEY) || 0);
-    if (!token) {
-      token = sessionStorage.getItem(TOKEN_KEY) || "";
-      exp   = Number(sessionStorage.getItem(EXP_KEY) || 0);
-      if (token) {
-        localStorage.setItem(TOKEN_KEY, token);
-        localStorage.setItem(EXP_KEY, String(exp));
-        sessionStorage.removeItem(TOKEN_KEY);
-        sessionStorage.removeItem(EXP_KEY);
-      }
-    }
-    return { token, exp };
-  } catch {
-    return { token: "", exp: 0 };
-  }
-}
-
-function writeStored(token, exp) {
-  localStorage.setItem(TOKEN_KEY, token);
-  localStorage.setItem(EXP_KEY, String(exp));
-}
-
-function clearStored() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(EXP_KEY);
-  sessionStorage.removeItem(TOKEN_KEY);
-  sessionStorage.removeItem(EXP_KEY);
-}
-
 export function DriveAuthProvider({ children }) {
-  const stored = readStored();
-  const [token, setToken]       = useState(stored.token);
-  const [tokenExp, setTokenExp] = useState(stored.exp);
   const [authError, setAuthError] = useState("");
-  const [renewing, setRenewing] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [connection, setConnection] = useState(null);
 
-  const pushToken = useCallback(async (accessToken, expiresIn) => {
+  const exchangeCode = useCallback(async (code) => {
     const res = await fetch(`${API_BASE}/api/drive/connect`, {
       method:  "POST",
       headers: jsonHeaders,
-      body:    JSON.stringify({ access_token: accessToken, expires_in: expiresIn }),
+      body:    JSON.stringify({ code }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error ?? "Failed to register the connection");
+    if (!res.ok) throw new Error(data.error ?? "Failed to connect Google Drive");
+    setConnection(data);
+    setAuthError("");
     return data;
   }, []);
 
-  const clearLocalSession = useCallback((message = "") => {
-    clearStored();
-    setToken("");
-    setTokenExp(0);
-    setRenewing(false);
-    if (message) setAuthError(message);
-  }, []);
-
-  const acceptToken = useCallback((accessToken, expiresIn) => {
-    const ttl = Math.max(60, Number(expiresIn) || 3600);
-    const exp = Date.now() + ttl * 1000;
-    writeStored(accessToken, exp);
-    setToken(accessToken);
-    setTokenExp(exp);
-    setAuthError("");
-    setRenewing(false);
-    return pushToken(accessToken, ttl).catch((err) => {
-      console.error("[drive] could not register token for auto-ingest:", err.message);
-      throw err;
-    });
-  }, [pushToken]);
-
-  const connect = useGoogleLogin({
-    flow:  "implicit",
-    scope: DRIVE_SCOPE,
-    onSuccess: (resp) => {
-      acceptToken(resp.access_token, resp.expires_in).catch(() => {
-        setAuthError("Connected in browser, but the server could not store the session. Try again.");
-      });
-    },
-    onError: () => setAuthError("Google Drive authorization failed."),
-  });
-
-  const renewToken = useGoogleLogin({
-    flow:   "implicit",
-    scope:  DRIVE_SCOPE,
-    prompt: "none",
-    onSuccess: (resp) => {
-      acceptToken(resp.access_token, resp.expires_in).catch(() => {
-        clearLocalSession("Could not refresh the Google Drive session. Please reconnect.");
-      });
+  const login = useGoogleLogin({
+    flow:         "auth-code",
+    ux_mode:      "popup",
+    scope:        DRIVE_SCOPE,
+    access_type:  "offline",
+    prompt:       "consent",
+    onSuccess: async (resp) => {
+      setConnecting(true);
+      try {
+        await exchangeCode(resp.code);
+      } catch (err) {
+        setAuthError(err.message || "Google Drive authorization failed.");
+      } finally {
+        setConnecting(false);
+      }
     },
     onError: () => {
-      clearLocalSession("Google Drive sign-in expired. Please reconnect.");
+      setConnecting(false);
+      setAuthError("Google Drive authorization failed.");
     },
     onNonOAuthError: () => {
-      clearLocalSession("Google Drive sign-in expired. Please reconnect.");
+      setConnecting(false);
+      setAuthError("Google Drive authorization was cancelled.");
     },
   });
 
-  const renewRef  = useRef(renewToken);
-  const tokenRef  = useRef(token);
-  const expRef    = useRef(tokenExp);
-  renewRef.current = renewToken;
-  tokenRef.current = token;
-  expRef.current   = tokenExp;
-
-  const renew = useCallback(() => {
-    if (renewing) return;
-    setRenewing(true);
+  const connect = useCallback(() => {
+    setAuthError("");
+    setConnecting(true);
     try {
-      renewRef.current();
+      login();
     } catch (err) {
-      console.error("[drive] silent renew failed:", err.message);
-      clearLocalSession("Google Drive sign-in expired. Please reconnect.");
+      setConnecting(false);
+      setAuthError(err.message || "Google Drive authorization failed.");
     }
-  }, [renewing, clearLocalSession]);
-
-  useEffect(() => {
-    const { token: t, exp } = readStored();
-    if (t && exp > Date.now() + 30_000) {
-      pushToken(t, Math.round((exp - Date.now()) / 1000)).catch(() => {});
-      return;
-    }
-    if (t) renew();
-  }, [pushToken, renew]);
-
-  useEffect(() => {
-    if (!tokenExp) return;
-    const delay = Math.max(1000, tokenExp - Date.now() - RENEW_LEAD_MS);
-    const timer = setTimeout(() => renew(), delay);
-    return () => clearTimeout(timer);
-  }, [tokenExp, renew]);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      const t   = tokenRef.current;
-      const exp = expRef.current;
-      if (!exp) return;
-      if (!t || Date.now() >= exp - RENEW_LEAD_MS) renew();
-    }, RENEW_RETRY_MS);
-    return () => clearInterval(id);
-  }, [renew]);
-
-  useEffect(() => {
-    function onVisible() {
-      if (document.visibilityState !== "visible") return;
-      const t   = tokenRef.current;
-      const exp = expRef.current;
-      if (!exp) return;
-      if (!t || Date.now() >= exp - RENEW_LEAD_MS) renew();
-    }
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onVisible);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onVisible);
-    };
-  }, [renew]);
-
-  useEffect(() => {
-    function onStorage(e) {
-      if (e.key !== TOKEN_KEY && e.key !== EXP_KEY) return;
-      const { token: t, exp } = readStored();
-      setToken(t);
-      setTokenExp(exp);
-    }
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
+  }, [login]);
 
   const disconnect = useCallback(async () => {
-    clearStored();
-    setToken("");
-    setTokenExp(0);
     const res  = await fetch(`${API_BASE}/api/drive/disconnect`, {
       method: "POST", headers: jsonHeaders,
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? "Failed to disconnect");
+    setConnection(data);
     return data;
   }, []);
 
-  const driveHeaders = useCallback((extra = {}) => ({
-    ...extra,
-    ...(token ? { "x-google-access-token": token } : {}),
-  }), [token]);
-
-  const live = Boolean(token) && tokenExp > Date.now() + 30_000;
-
   return (
     <DriveAuthContext.Provider value={{
-      token, tokenExp, live, renewing, authError, setAuthError,
-      connect, disconnect, renew, driveHeaders,
+      authError,
+      setAuthError,
+      connecting,
+      connection,
+      setConnection,
+      connect,
+      disconnect,
+      live: Boolean(connection?.connected),
+      renewing: connecting,
+      renew: connect,
+      driveHeaders: (extra = {}) => ({ ...extra }),
     }}>
       {children}
     </DriveAuthContext.Provider>

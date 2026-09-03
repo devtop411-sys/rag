@@ -77,8 +77,11 @@ jobs:
             echo "OAUTH_SIGNING_SECRET=$OAUTH_SIGNING_SECRET"   >> .env
 
             # Ports offset by 10 so both envs run on the same EC2
-            echo "PORT=3011"      >> .env
-            echo "MCP_PORT=3012"  >> .env
+            echo "PORT=3011"              >> .env
+            echo "BACKEND_HOST_PORT=3011" >> .env
+            echo "MCP_PORT=3012"          >> .env
+            echo "MCP_HOST_PORT=3012"     >> .env
+            echo "FRONTEND_HOST_PORT=8090" >> .env
 
             # Stop dev containers (separate project = no collision with prod)
             COMPOSE_PROJECT_NAME=rag-dev \

@@ -1,19 +1,13 @@
 services:
   backend:
-    ports:
-      - "3011:3011"
     environment:
       PORT: 3011
 
   mcp:
-    ports:
-      - "3012:3012"
     environment:
       MCP_PORT: 3012
 
   frontend:
-    ports:
-      - "8090:80"
     build:
       args:
         VITE_API_URL: ${VITE_API_URL:-https://dev.rag.collider.vc}

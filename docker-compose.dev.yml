@@ -1,0 +1,19 @@
+services:
+  backend:
+    ports:
+      - "3011:3001"
+    environment:
+      PORT: 3001
+
+  mcp:
+    ports:
+      - "3012:3002"
+    environment:
+      MCP_PORT: 3002
+
+  frontend:
+    ports:
+      - "8090:80"
+    build:
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3011}

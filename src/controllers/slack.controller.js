@@ -89,7 +89,7 @@ export async function slackEvents(req, res) {
   console.log("QUESTION:", question);
 
   try {
-    const difyUrl = process.env.DIFY_URL || "http://34.245.224.130/v1/chat-messages";
+    const difyUrl = process.env.DIFY_URL || "http://54.220.173.155/v1/chat-messages";
     const difyResponse = await fetch(difyUrl, {
       method: "POST",
       headers: {

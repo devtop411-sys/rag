@@ -21,6 +21,11 @@ after(
     ),
 );
 
+test("resolveDriveRedirectUri defaults to GIS postmessage", () => {
+  assert.equal(resolveDriveRedirectUri(), "postmessage");
+  assert.equal(resolveDriveRedirectUri("postmessage"), "postmessage");
+});
+
 test("resolveDriveRedirectUri accepts the production Drive page", () => {
   assert.equal(
     resolveDriveRedirectUri("https://rag.collider.vc/drive"),
@@ -59,10 +64,11 @@ test("POST /api/drive/connect without code returns 400", async () => {
   assert.match(json.error, /Authorization code is required/);
 });
 
-test("GET /api/drive/authorize returns a Google consent URL when OAuth is configured", async () => {
+test("GET /api/drive/authorize binds Drive to the app login via login_hint", async () => {
   const redirect = encodeURIComponent("https://rag.collider.vc/drive");
+  const hint = encodeURIComponent("oleksandr@collider.vc");
   const res = await fetch(
-    `${baseUrl}/api/drive/authorize?redirect_uri=${redirect}&state=abc`,
+    `${baseUrl}/api/drive/authorize?redirect_uri=${redirect}&state=abc&login_hint=${hint}`,
     { headers: apiHeaders() },
   );
   const json = await res.json();
@@ -77,8 +83,7 @@ test("GET /api/drive/authorize returns a Google consent URL when OAuth is config
   assert.equal(url.searchParams.get("redirect_uri"), "https://rag.collider.vc/drive");
   assert.equal(url.searchParams.get("response_type"), "code");
   assert.equal(url.searchParams.get("access_type"), "offline");
-  assert.equal(url.searchParams.get("prompt"), "select_account consent");
-  assert.match(json.url, /prompt=select_account%20consent/);
-  assert.equal(url.searchParams.has("login_hint"), false);
+  assert.equal(url.searchParams.get("prompt"), "consent");
+  assert.equal(url.searchParams.get("login_hint"), "oleksandr@collider.vc");
   assert.equal(url.searchParams.get("state"), "abc");
 });

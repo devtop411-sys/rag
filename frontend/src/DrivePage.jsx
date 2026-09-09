@@ -57,6 +57,7 @@ function DrivePageInner() {
   const {
     connecting, authError, setAuthError,
     connect, disconnect, connection,
+    appEmail,
   } = useDriveAuth();
   const [conn, setConn]           = useState(null);
   const [settings, setSettings]   = useState(DEFAULT_SETTINGS);
@@ -395,13 +396,13 @@ function DrivePageInner() {
               <strong>Google Drive</strong>
               <p className="fm-meta" style={{ margin: "4px 0 0" }}>
                 {connecting
-                  ? "Connecting to Google Drive…"
-                  : "Connect once — the server stores a refresh token so auto-ingest keeps working without reopening this page."}
+                  ? `Connecting Google Drive as ${appEmail || "your account"}…`
+                  : `Connect Google Drive as ${appEmail || "the account signed into this app"}. Auto-ingest keeps working without reopening this page.`}
               </p>
             </div>
             <div>
               <button className="btn btn--primary" onClick={() => connect()} disabled={connecting || busy === "connect"}>
-                {connecting ? "Connecting…" : "Connect Google Drive"}
+                {connecting ? "Connecting…" : appEmail ? `Connect ${appEmail}` : "Connect Google Drive"}
               </button>
             </div>
           </div>

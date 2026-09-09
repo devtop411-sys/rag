@@ -15,6 +15,7 @@ const EXPIRY_SKEW_MS = 60 * 1000;
 
 export const DRIVE_OAUTH_CALLBACK_PATH = "/drive";
 export const DRIVE_OAUTH_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+export const DRIVE_OAUTH_POSTMESSAGE = "postmessage";
 
 const STATIC_DRIVE_ORIGINS = [
   "http://localhost:5173",
@@ -42,17 +43,16 @@ export function allowedDriveOrigins() {
 }
 
 /**
- * Google requires the token-exchange redirect_uri to match the authorize URL
- * exactly. Default is PUBLIC_BASE_URL/drive (or localhost in dev).
+ * GIS popup uses redirect_uri=postmessage (no Console redirect URI).
+ * A real {origin}/drive URI is only for the full-page redirect flow.
  */
 export function resolveDriveRedirectUri(requested) {
-  const fallbackOrigin = publicOrigin() || "http://localhost:5173";
-  const fallback = `${fallbackOrigin}${DRIVE_OAUTH_CALLBACK_PATH}`;
-  if (!requested) return fallback;
+  const value = String(requested || "").trim();
+  if (!value || value === DRIVE_OAUTH_POSTMESSAGE) return DRIVE_OAUTH_POSTMESSAGE;
 
   let url;
   try {
-    url = new URL(requested);
+    url = new URL(value);
   } catch {
     const err = new Error("Invalid redirect_uri");
     err.status = 400;
@@ -74,7 +74,13 @@ export function resolveDriveRedirectUri(requested) {
   return `${url.origin}${DRIVE_OAUTH_CALLBACK_PATH}`;
 }
 
-export function buildDriveAuthorizeUrl({ redirectUri, state } = {}) {
+function sanitizeLoginHint(value) {
+  const email = String(value || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "";
+  return email;
+}
+
+export function buildDriveAuthorizeUrl({ redirectUri, state, loginHint } = {}) {
   requireOAuthClient();
   const resolved = resolveDriveRedirectUri(redirectUri);
   const params = new URLSearchParams({
@@ -83,14 +89,13 @@ export function buildDriveAuthorizeUrl({ redirectUri, state } = {}) {
     response_type: "code",
     scope:         DRIVE_OAUTH_SCOPE,
     access_type:   "offline",
+    prompt:        "consent",
     include_granted_scopes: "true",
   });
   if (state) params.set("state", String(state));
-  // Google ignores `prompt=select_account+consent` (URLSearchParams encoding)
-  // and then silently uses the Chrome profile account. Force %20 so the
-  // account picker always appears, including "Use another account".
-  const qs = `${params.toString()}&prompt=select_account%20consent`;
-  return { url: `${AUTH_URL}?${qs}`, redirect_uri: resolved };
+  const hint = sanitizeLoginHint(loginHint);
+  if (hint) params.set("login_hint", hint);
+  return { url: `${AUTH_URL}?${params}`, redirect_uri: resolved };
 }
 
 let ensured = false;

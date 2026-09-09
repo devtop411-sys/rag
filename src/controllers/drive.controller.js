@@ -60,7 +60,8 @@ export async function authorize(req, res) {
   try {
     const redirectUri = (req.query.redirect_uri || "").toString().trim() || undefined;
     const state = (req.query.state || "").toString().trim();
-    res.json(buildDriveAuthorizeUrl({ redirectUri, state }));
+    const loginHint = (req.query.login_hint || "").toString().trim();
+    res.json(buildDriveAuthorizeUrl({ redirectUri, state, loginHint }));
   } catch (err) {
     sendError(res, err);
   }

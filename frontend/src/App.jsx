@@ -70,7 +70,8 @@ export default function App() {
     NAV_ITEMS.find((n) => location.pathname.startsWith(n.to)) ?? NAV_ITEMS[0];
 
   return (
-    <DriveAuthProvider>
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID} locale="en">
+      <DriveAuthProvider>
       <div className={`shell ${collapsed ? "shell--collapsed" : ""} ${mobileOpen ? "shell--mobile-open" : ""}`}>
         <div className="shell__scrim" onClick={() => setMobileOpen(false)} />
 
@@ -138,6 +139,7 @@ export default function App() {
           </main>
         </div>
       </div>
-    </DriveAuthProvider>
+      </DriveAuthProvider>
+    </GoogleOAuthProvider>
   );
 }

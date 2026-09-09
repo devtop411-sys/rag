@@ -1,6 +1,5 @@
 import { useState, useRef } from "react";
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "";
+import { API_BASE } from "./apiBase.js";
 
 const ACCEPT = ".pdf,.txt,.md";
 

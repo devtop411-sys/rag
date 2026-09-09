@@ -1,7 +1,5 @@
 import { useState, useEffect } from "react";
-
-const API_BASE    = import.meta.env.VITE_API_URL ?? "";
-const API_KEY     = import.meta.env.VITE_API_KEY ?? "";
+import { API_BASE, API_KEY } from "./apiBase.js";
 const authHeaders = API_KEY ? { "x-api-key": API_KEY } : {};
 const jsonHeaders = { "Content-Type": "application/json", ...authHeaders };
 

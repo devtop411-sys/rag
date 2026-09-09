@@ -75,6 +75,7 @@ jobs:
             echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"         >> .env
             echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> .env
             echo "PUBLIC_BASE_URL=https://dev.rag.collider.vc"  >> .env
+            echo "VITE_API_URL=" >> .env
             echo "OAUTH_SIGNING_SECRET=$OAUTH_SIGNING_SECRET"   >> .env
 
             # Ports offset by 10 so both envs run on the same EC2

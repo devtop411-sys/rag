@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useDriveAuth } from "./driveAuth.jsx";
-
-const API_BASE    = import.meta.env.VITE_API_URL ?? "";
-const API_KEY     = import.meta.env.VITE_API_KEY ?? "";
+import { API_BASE, API_KEY } from "./apiBase.js";
 const DRIVE_CLIENT_ID =
   import.meta.env.VITE_GOOGLE_CLIENT_ID ||
   import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID ||

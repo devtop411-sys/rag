@@ -144,14 +144,26 @@ function requireOAuthClient() {
   }
 }
 
+function fetchErrorMessage(err) {
+  const cause = err?.cause;
+  return cause?.code || cause?.message || err?.message || "fetch failed";
+}
+
 async function tokenRequest(body) {
   requireOAuthClient();
-  const res = await fetch(TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(body),
-    signal: AbortSignal.timeout(30_000),
-  });
+  let res;
+  try {
+    res = await fetch(TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    const wrapped = new Error(`Could not reach Google OAuth: ${fetchErrorMessage(err)}`);
+    wrapped.status = 502;
+    throw wrapped;
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = data.error_description || data.error || `HTTP ${res.status}`;

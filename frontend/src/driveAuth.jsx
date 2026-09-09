@@ -1,8 +1,6 @@
 import { createContext, useCallback, useContext, useState } from "react";
 import { useGoogleLogin } from "@react-oauth/google";
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "";
-const API_KEY  = import.meta.env.VITE_API_KEY ?? "";
+import { API_BASE, API_KEY } from "./apiBase.js";
 
 const jsonHeaders = {
   "Content-Type": "application/json",
@@ -25,12 +23,17 @@ export function DriveAuthProvider({ children }) {
   const [connection, setConnection] = useState(null);
 
   const exchangeCode = useCallback(async (code) => {
-    const res = await fetch(`${API_BASE}/api/drive/connect`, {
-      method:  "POST",
-      headers: jsonHeaders,
-      body:    JSON.stringify({ code }),
-    });
-    const data = await res.json();
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/api/drive/connect`, {
+        method:  "POST",
+        headers: jsonHeaders,
+        body:    JSON.stringify({ code }),
+      });
+    } catch {
+      throw new Error("Could not reach the API from this page. Redeploy so the UI calls /api on the same domain.");
+    }
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? "Failed to connect Google Drive");
     setConnection(data);
     setAuthError("");

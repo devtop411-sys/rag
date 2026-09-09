@@ -19,9 +19,7 @@ import {
 } from "./icons/index.jsx";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
-const DRIVE_CLIENT_ID =
-  import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID ||
-  GOOGLE_CLIENT_ID;
+const DRIVE_CLIENT_ID = GOOGLE_CLIENT_ID;
 
 const NAV_ITEMS = [
   { to: "/files",      label: "File Manager",   icon: FolderIcon },

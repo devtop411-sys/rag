@@ -4,8 +4,8 @@ import { useDriveAuth } from "./driveAuth.jsx";
 const API_BASE    = import.meta.env.VITE_API_URL ?? "";
 const API_KEY     = import.meta.env.VITE_API_KEY ?? "";
 const DRIVE_CLIENT_ID =
-  import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID ||
   import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID ||
   "";
 
 const authHeaders = API_KEY ? { "x-api-key": API_KEY } : {};

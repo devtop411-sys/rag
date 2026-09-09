@@ -135,8 +135,9 @@ export async function saveConnection(patch) {
 function requireOAuthClient() {
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
     const err = new Error(
-      "Google Drive OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET " +
-      "(or MCP_GOOGLE_CLIENT_ID / MCP_GOOGLE_CLIENT_SECRET)."
+      "Google Drive needs the Client Secret of the same Web client used to sign in " +
+      `(GOOGLE_CLIENT_ID). Login does not use a secret; Drive does. ` +
+      `Open that client in Google Cloud Console and copy its Client secret into GOOGLE_CLIENT_SECRET.`
     );
     err.status = 500;
     throw err;

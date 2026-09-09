@@ -106,15 +106,38 @@ export const DRIVE_DEFAULT_WATCH_FOLDERS = [
   { id: "sharedWithMe", name: "Shared with me" },
 ];
 
-export const GOOGLE_CLIENT_ID =
-  process.env.GOOGLE_CLIENT_ID ||
-  process.env.MCP_GOOGLE_CLIENT_ID ||
-  "";
+function cleanEnv(value) {
+  return String(value || "").trim().replace(/^['"]|['"]$/g, "");
+}
 
-export const GOOGLE_CLIENT_SECRET =
-  process.env.GOOGLE_CLIENT_SECRET ||
-  process.env.MCP_GOOGLE_CLIENT_SECRET ||
-  "";
+function googleOAuthPair() {
+  const googleId     = cleanEnv(process.env.GOOGLE_CLIENT_ID);
+  const googleSecret = cleanEnv(process.env.GOOGLE_CLIENT_SECRET);
+  const mcpId        = cleanEnv(process.env.MCP_GOOGLE_CLIENT_ID);
+  const mcpSecret    = cleanEnv(process.env.MCP_GOOGLE_CLIENT_SECRET);
+
+  // Same client the Sign-In button uses. Drive must use this ID + its secret.
+  const loginId = googleId || mcpId;
+
+  if (googleId && googleSecret && loginId === googleId) {
+    return { id: googleId, secret: googleSecret };
+  }
+  if (mcpId && mcpSecret && loginId === mcpId) {
+    return { id: mcpId, secret: mcpSecret };
+  }
+  if (loginId && mcpId === loginId && mcpSecret) {
+    return { id: loginId, secret: mcpSecret };
+  }
+  if (loginId && googleId === loginId && googleSecret) {
+    return { id: loginId, secret: googleSecret };
+  }
+
+  return { id: loginId, secret: "" };
+}
+
+const googlePair = googleOAuthPair();
+export const GOOGLE_CLIENT_ID = googlePair.id;
+export const GOOGLE_CLIENT_SECRET = googlePair.secret;
 
 export const ALLOWED_DOMAIN  = "collider.vc";
 export const ALLOWED_EMAILS  = new Set(["devtop411@gmail.com"]);

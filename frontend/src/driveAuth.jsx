@@ -40,6 +40,7 @@ export function DriveAuthProvider({ children }) {
   const login = useGoogleLogin({
     flow:         "auth-code",
     ux_mode:      "popup",
+    redirect_uri: "postmessage",
     scope:        DRIVE_SCOPE,
     access_type:  "offline",
     prompt:       "consent",

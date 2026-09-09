@@ -107,7 +107,7 @@ export const DRIVE_DEFAULT_WATCH_FOLDERS = [
 ];
 
 function cleanEnv(value) {
-  return String(value || "").trim().replace(/^['"]|['"]$/g, "");
+  return String(value || "").replace(/\s+/g, "").replace(/^['"]|['"]$/g, "");
 }
 
 function googleOAuthPair() {

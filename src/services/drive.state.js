@@ -155,7 +155,12 @@ async function tokenRequest(body) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = data.error_description || data.error || `HTTP ${res.status}`;
-    const err = new Error(`Google OAuth token error: ${msg}`);
+    const invalidSecret = /invalid.?client|invalid.?secret|Unauthorized/i.test(msg);
+    const err = new Error(
+      invalidSecret
+        ? "The client secret does not match GOOGLE_CLIENT_ID. Open that same Web client in Google Cloud Console, copy its current Client secret into GitHub secret GOOGLE_CLIENT_SECRET (not the MCP client), then re-run the Deploy workflow."
+        : `Google OAuth token error: ${msg}`
+    );
     err.status = res.status === 401 || res.status === 400 ? 401 : 502;
     throw err;
   }

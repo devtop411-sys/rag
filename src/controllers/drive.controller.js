@@ -20,6 +20,8 @@ import {
   exchangeCodeForTokens,
   isConnected,
   publicConnection,
+  buildDriveAuthorizeUrl,
+  resolveDriveRedirectUri,
 } from "../services/drive.state.js";
 import { startSync, getSyncState } from "../services/drive.sync.js";
 
@@ -54,6 +56,16 @@ export async function status(req, res) {
   }
 }
 
+export async function authorize(req, res) {
+  try {
+    const redirectUri = (req.query.redirect_uri || "").toString().trim() || undefined;
+    const state = (req.query.state || "").toString().trim();
+    res.json(buildDriveAuthorizeUrl({ redirectUri, state }));
+  } catch (err) {
+    sendError(res, err);
+  }
+}
+
 export async function connect(req, res) {
   try {
     const code = (req.body?.code || "").toString().trim();
@@ -63,8 +75,12 @@ export async function connect(req, res) {
       });
     }
 
+    const redirectUri = resolveDriveRedirectUri(
+      (req.body?.redirect_uri || "").toString().trim() || undefined,
+    );
+
     const previous = await getConnection();
-    const tokens = await exchangeCodeForTokens(code);
+    const tokens = await exchangeCodeForTokens(code, redirectUri);
 
     let account = previous.account;
     try {

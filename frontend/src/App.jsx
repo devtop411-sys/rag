@@ -19,7 +19,6 @@ import {
 } from "./icons/index.jsx";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
-const DRIVE_CLIENT_ID = GOOGLE_CLIENT_ID;
 
 const NAV_ITEMS = [
   { to: "/files",      label: "File Manager",   icon: FolderIcon },
@@ -71,8 +70,7 @@ export default function App() {
     NAV_ITEMS.find((n) => location.pathname.startsWith(n.to)) ?? NAV_ITEMS[0];
 
   return (
-    <GoogleOAuthProvider clientId={DRIVE_CLIENT_ID || GOOGLE_CLIENT_ID} locale="en">
-      <DriveAuthProvider>
+    <DriveAuthProvider>
       <div className={`shell ${collapsed ? "shell--collapsed" : ""} ${mobileOpen ? "shell--mobile-open" : ""}`}>
         <div className="shell__scrim" onClick={() => setMobileOpen(false)} />
 
@@ -140,7 +138,6 @@ export default function App() {
           </main>
         </div>
       </div>
-      </DriveAuthProvider>
-    </GoogleOAuthProvider>
+    </DriveAuthProvider>
   );
 }

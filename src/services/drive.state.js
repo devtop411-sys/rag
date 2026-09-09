@@ -10,9 +10,85 @@ import {
 const CONNECTION_ID = "00000000-0000-4000-8000-000000000002";
 const DUMMY_VECTOR  = [1];
 const TOKEN_URL     = "https://oauth2.googleapis.com/token";
+const AUTH_URL      = "https://accounts.google.com/o/oauth2/v2/auth";
 const EXPIRY_SKEW_MS = 60 * 1000;
 
-export const DRIVE_OAUTH_REDIRECT_URI = "postmessage";
+export const DRIVE_OAUTH_CALLBACK_PATH = "/drive";
+export const DRIVE_OAUTH_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+
+const STATIC_DRIVE_ORIGINS = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:8080",
+  "https://rag.collider.vc",
+  "https://dev.rag.collider.vc",
+];
+
+function publicOrigin() {
+  const pub = (process.env.PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (!pub) return "";
+  try {
+    return new URL(pub).origin;
+  } catch {
+    return pub;
+  }
+}
+
+export function allowedDriveOrigins() {
+  const origins = new Set(STATIC_DRIVE_ORIGINS);
+  const pub = publicOrigin();
+  if (pub) origins.add(pub);
+  return origins;
+}
+
+/**
+ * Google requires the token-exchange redirect_uri to match the authorize URL
+ * exactly. Default is PUBLIC_BASE_URL/drive (or localhost in dev).
+ */
+export function resolveDriveRedirectUri(requested) {
+  const fallbackOrigin = publicOrigin() || "http://localhost:5173";
+  const fallback = `${fallbackOrigin}${DRIVE_OAUTH_CALLBACK_PATH}`;
+  if (!requested) return fallback;
+
+  let url;
+  try {
+    url = new URL(requested);
+  } catch {
+    const err = new Error("Invalid redirect_uri");
+    err.status = 400;
+    throw err;
+  }
+
+  if (url.pathname !== DRIVE_OAUTH_CALLBACK_PATH || url.search || url.hash) {
+    const err = new Error("redirect_uri must be the Drive page (origin + /drive)");
+    err.status = 400;
+    throw err;
+  }
+
+  if (!allowedDriveOrigins().has(url.origin)) {
+    const err = new Error(`redirect_uri origin is not allowed: ${url.origin}`);
+    err.status = 400;
+    throw err;
+  }
+
+  return `${url.origin}${DRIVE_OAUTH_CALLBACK_PATH}`;
+}
+
+export function buildDriveAuthorizeUrl({ redirectUri, state } = {}) {
+  requireOAuthClient();
+  const resolved = resolveDriveRedirectUri(redirectUri);
+  const params = new URLSearchParams({
+    client_id:     GOOGLE_CLIENT_ID,
+    redirect_uri:  resolved,
+    response_type: "code",
+    scope:         DRIVE_OAUTH_SCOPE,
+    access_type:   "offline",
+    prompt:        "consent",
+    include_granted_scopes: "true",
+  });
+  if (state) params.set("state", String(state));
+  return { url: `${AUTH_URL}?${params}`, redirect_uri: resolved };
+}
 
 let ensured = false;
 let refreshInFlight = null;
@@ -180,15 +256,15 @@ async function tokenRequest(body) {
 }
 
 /**
- * Exchange an authorization code (from the browser GIS popup) for tokens.
+ * Exchange an authorization code (from the /drive redirect) for tokens.
  * Requires access_type=offline + consent so Google returns a refresh_token.
  */
-export async function exchangeCodeForTokens(code) {
+export async function exchangeCodeForTokens(code, redirectUri) {
   const data = await tokenRequest({
     code,
     client_id:     GOOGLE_CLIENT_ID,
     client_secret: GOOGLE_CLIENT_SECRET,
-    redirect_uri:  DRIVE_OAUTH_REDIRECT_URI,
+    redirect_uri:  resolveDriveRedirectUri(redirectUri),
     grant_type:    "authorization_code",
   });
 

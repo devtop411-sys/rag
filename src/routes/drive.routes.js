@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireApiKey } from "../middleware/requireApiKey.js";
 import {
   status,
+  authorize,
   connect,
   disconnect,
   files,
@@ -16,6 +17,7 @@ import {
 const router = Router();
 
 router.get("/api/drive/status",      requireApiKey, status);
+router.get("/api/drive/authorize",   requireApiKey, authorize);
 router.post("/api/drive/connect",    requireApiKey, connect);
 router.post("/api/drive/disconnect", requireApiKey, disconnect);
 

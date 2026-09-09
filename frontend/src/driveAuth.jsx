@@ -27,15 +27,6 @@ function pendingDriveCallback() {
   return url.pathname === CALLBACK_PATH && (url.searchParams.has("code") || url.searchParams.has("error"));
 }
 
-function storedUserEmail() {
-  try {
-    const user = JSON.parse(localStorage.getItem("collider_user") ?? "null");
-    return String(user?.email || "").trim();
-  } catch {
-    return "";
-  }
-}
-
 export function useDriveAuth() {
   const ctx = useContext(DriveAuthContext);
   if (!ctx) throw new Error("useDriveAuth must be used within DriveAuthProvider");
@@ -138,8 +129,6 @@ export function DriveAuthProvider({ children }) {
       sessionStorage.setItem(STATE_KEY, state);
       const redirectUri = driveRedirectUri();
       const qs = new URLSearchParams({ redirect_uri: redirectUri, state });
-      const loginHint = storedUserEmail();
-      if (loginHint) qs.set("login_hint", loginHint);
       const res = await fetch(`${API_BASE}/api/drive/authorize?${qs}`, {
         headers: authHeaders,
       });

@@ -78,22 +78,7 @@ test("GET /api/drive/authorize returns a Google consent URL when OAuth is config
   assert.equal(url.searchParams.get("response_type"), "code");
   assert.equal(url.searchParams.get("access_type"), "offline");
   assert.equal(url.searchParams.get("prompt"), "select_account consent");
+  assert.match(json.url, /prompt=select_account%20consent/);
+  assert.equal(url.searchParams.has("login_hint"), false);
   assert.equal(url.searchParams.get("state"), "abc");
-});
-
-test("GET /api/drive/authorize preselects the app login email via login_hint", async () => {
-  const redirect = encodeURIComponent("https://rag.collider.vc/drive");
-  const res = await fetch(
-    `${baseUrl}/api/drive/authorize?redirect_uri=${redirect}&state=abc&login_hint=${encodeURIComponent("ada@collider.vc")}`,
-    { headers: apiHeaders() },
-  );
-  const json = await res.json();
-  if (res.status !== 200) {
-    assert.equal(res.status, 500);
-    assert.match(json.error, /GOOGLE_CLIENT|Client Secret|Client secret/i);
-    return;
-  }
-  const url = new URL(json.url);
-  assert.equal(url.searchParams.get("login_hint"), "ada@collider.vc");
-  assert.equal(url.searchParams.get("prompt"), "select_account consent");
 });

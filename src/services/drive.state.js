@@ -74,13 +74,7 @@ export function resolveDriveRedirectUri(requested) {
   return `${url.origin}${DRIVE_OAUTH_CALLBACK_PATH}`;
 }
 
-function sanitizeLoginHint(value) {
-  const email = String(value || "").trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "";
-  return email;
-}
-
-export function buildDriveAuthorizeUrl({ redirectUri, state, loginHint } = {}) {
+export function buildDriveAuthorizeUrl({ redirectUri, state } = {}) {
   requireOAuthClient();
   const resolved = resolveDriveRedirectUri(redirectUri);
   const params = new URLSearchParams({
@@ -89,13 +83,14 @@ export function buildDriveAuthorizeUrl({ redirectUri, state, loginHint } = {}) {
     response_type: "code",
     scope:         DRIVE_OAUTH_SCOPE,
     access_type:   "offline",
-    prompt:        "select_account consent",
     include_granted_scopes: "true",
   });
   if (state) params.set("state", String(state));
-  const hint = sanitizeLoginHint(loginHint);
-  if (hint) params.set("login_hint", hint);
-  return { url: `${AUTH_URL}?${params}`, redirect_uri: resolved };
+  // Google ignores `prompt=select_account+consent` (URLSearchParams encoding)
+  // and then silently uses the Chrome profile account. Force %20 so the
+  // account picker always appears, including "Use another account".
+  const qs = `${params.toString()}&prompt=select_account%20consent`;
+  return { url: `${AUTH_URL}?${qs}`, redirect_uri: resolved };
 }
 
 let ensured = false;

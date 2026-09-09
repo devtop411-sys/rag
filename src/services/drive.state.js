@@ -74,7 +74,13 @@ export function resolveDriveRedirectUri(requested) {
   return `${url.origin}${DRIVE_OAUTH_CALLBACK_PATH}`;
 }
 
-export function buildDriveAuthorizeUrl({ redirectUri, state } = {}) {
+function sanitizeLoginHint(value) {
+  const email = String(value || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "";
+  return email;
+}
+
+export function buildDriveAuthorizeUrl({ redirectUri, state, loginHint } = {}) {
   requireOAuthClient();
   const resolved = resolveDriveRedirectUri(redirectUri);
   const params = new URLSearchParams({
@@ -83,10 +89,12 @@ export function buildDriveAuthorizeUrl({ redirectUri, state } = {}) {
     response_type: "code",
     scope:         DRIVE_OAUTH_SCOPE,
     access_type:   "offline",
-    prompt:        "consent",
+    prompt:        "select_account consent",
     include_granted_scopes: "true",
   });
   if (state) params.set("state", String(state));
+  const hint = sanitizeLoginHint(loginHint);
+  if (hint) params.set("login_hint", hint);
   return { url: `${AUTH_URL}?${params}`, redirect_uri: resolved };
 }
 

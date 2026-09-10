@@ -1,5 +1,107 @@
 services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_HOST_PORT:-3011}:${PORT:-3011}"
+    environment:
+      PORT:              ${PORT:-3011}
+      VOYAGE_API_KEY:    ${VOYAGE_API_KEY}
+      VOYAGE_MODEL:      ${VOYAGE_MODEL:-voyage-3.5}
+      QDRANT_URL:        ${QDRANT_URL}
+      QDRANT_API_KEY:    ${QDRANT_API_KEY}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-investment_memos}
+      API_KEY:           ${API_KEY}
+      OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
+      OPENAI_MODEL:      ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_BASE_URL:   ${OPENAI_BASE_URL:-}
+      SLACK_BOT_TOKEN:   ${SLACK_BOT_TOKEN}
+      DIFY_API_KEY:      ${DIFY_API_KEY}
+      DIFY_URL:          ${DIFY_URL:-}
+      GOOGLE_CLIENT_ID:         ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET:     ${GOOGLE_CLIENT_SECRET:-}
+      MCP_GOOGLE_CLIENT_ID:     ${MCP_GOOGLE_CLIENT_ID:-}
+      MCP_GOOGLE_CLIENT_SECRET: ${MCP_GOOGLE_CLIENT_SECRET:-}
+      S3_BUCKET:            ${S3_BUCKET:-rag-files-340752823591}
+      AWS_REGION:           ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID:    ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # MCP OAuth 2.1 — must be https:// in production (behind TLS-terminating proxy)
+      PUBLIC_BASE_URL:      ${PUBLIC_BASE_URL:-}
+      OAUTH_SIGNING_SECRET: ${OAUTH_SIGNING_SECRET:-}
+      OAUTH_ACCESS_TTL:     ${OAUTH_ACCESS_TTL:-3600}
+      OAUTH_REFRESH_TTL:    ${OAUTH_REFRESH_TTL:-2592000}
+      OAUTH_EXTRA_REDIRECT_URIS: ${OAUTH_EXTRA_REDIRECT_URIS:-}
+    volumes:
+      - uploads:/app/uploads
+    networks:
+      - rag-net
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:${PORT:-3011}/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "mcp-http.js"]
+    restart: unless-stopped
+    ports:
+      - "${MCP_HOST_PORT:-3012}:${MCP_PORT:-3012}"
+    environment:
+      MCP_PORT:          ${MCP_PORT:-3012}
+      VOYAGE_API_KEY:    ${VOYAGE_API_KEY}
+      VOYAGE_MODEL:      ${VOYAGE_MODEL:-voyage-3.5}
+      QDRANT_URL:        ${QDRANT_URL}
+      QDRANT_API_KEY:    ${QDRANT_API_KEY}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-investment_memos}
+      OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
+      OPENAI_MODEL:      ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_BASE_URL:   ${OPENAI_BASE_URL:-}
+      GOOGLE_CLIENT_ID:         ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET:     ${GOOGLE_CLIENT_SECRET:-}
+      MCP_GOOGLE_CLIENT_ID:     ${MCP_GOOGLE_CLIENT_ID:-}
+      MCP_GOOGLE_CLIENT_SECRET: ${MCP_GOOGLE_CLIENT_SECRET:-}
+      PUBLIC_BASE_URL:      ${PUBLIC_BASE_URL:-}
+      OAUTH_SIGNING_SECRET: ${OAUTH_SIGNING_SECRET:-}
+      OAUTH_ACCESS_TTL:     ${OAUTH_ACCESS_TTL:-3600}
+      OAUTH_REFRESH_TTL:    ${OAUTH_REFRESH_TTL:-2592000}
+      OAUTH_EXTRA_REDIRECT_URIS: ${OAUTH_EXTRA_REDIRECT_URIS:-}
+    networks:
+      - rag-net
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:${MCP_PORT:-3012}/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   frontend:
     build:
+      context: ./frontend
+      dockerfile: Dockerfile
       args:
-        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_API_URL: ${VITE_API_URL:-https://dev.rag.collider.vc}
+        VITE_API_KEY:                ${VITE_API_KEY:-}
+        VITE_GOOGLE_CLIENT_ID:       ${GOOGLE_CLIENT_ID:-}
+        VITE_GOOGLE_DRIVE_CLIENT_ID: ${VITE_GOOGLE_DRIVE_CLIENT_ID:-}
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_HOST_PORT:-8090}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - rag-net
+
+volumes:
+  uploads:
+
+networks:
+  rag-net:
+    driver: bridge

@@ -42,7 +42,7 @@ export function DriveAuthProvider({ children }) {
     ux_mode:      "popup",
     scope:        DRIVE_SCOPE,
     access_type:  "offline",
-    prompt:       "consent",
+    prompt:       "select_account consent",
     onSuccess: async (resp) => {
       setConnecting(true);
       try {

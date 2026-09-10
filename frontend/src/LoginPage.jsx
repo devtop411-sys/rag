@@ -29,6 +29,7 @@ export default function LoginPage({ onLogin }) {
       <div className="login-card">
         <div className="login-logo">⚡</div>
         <h1 className="login-title">Collider VC</h1>
+        <p className="login-subtitle">Sign in with your @collider.vc account. The popup lets you pick which Google account to use.</p>
 
         <div className="login-btn-wrap">
           {loading ? (
@@ -45,6 +46,10 @@ export default function LoginPage({ onLogin }) {
               width="280"
               text="signin_with"
               shape="rectangular"
+              useOneTap={false}
+              auto_select={false}
+              prompt="select_account"
+              itp_support
             />
           )}
         </div>

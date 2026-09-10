@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { GoogleLogin } from "@react-oauth/google";
 
+const LOGIN_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
+
 export default function LoginPage({ onLogin }) {
   const [error,   setError]   = useState("");
   const [loading, setLoading] = useState(false);
@@ -48,8 +50,9 @@ export default function LoginPage({ onLogin }) {
               shape="rectangular"
               useOneTap={false}
               auto_select={false}
+              use_fedcm_for_prompt={false}
+              ux_mode="popup"
               prompt="select_account"
-              itp_support
             />
           )}
         </div>
@@ -59,6 +62,12 @@ export default function LoginPage({ onLogin }) {
             {error}
           </div>
         )}
+
+        <p className="login-subtitle" style={{ marginTop: 16, wordBreak: "break-all" }}>
+          Origin: {typeof window !== "undefined" ? window.location.origin : ""}
+          <br />
+          Client ID: {LOGIN_CLIENT_ID || "(missing VITE_GOOGLE_CLIENT_ID)"}
+        </p>
       </div>
     </div>
   );

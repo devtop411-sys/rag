@@ -34,6 +34,10 @@ function formatDate(value) {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
 }
 
+function isEmptyFile(file) {
+  return file.size != null && Number(file.size) === 0;
+}
+
 export default function DrivePage() {
   if (!DRIVE_CLIENT_ID) {
     return (
@@ -349,7 +353,9 @@ function DrivePageInner() {
     });
   }
 
-  const selectable = files.filter((f) => f.ingestible && f._status !== "ingesting");
+  const selectable = files.filter(
+    (f) => f.ingestible && !isEmptyFile(f) && f._status !== "ingesting"
+  );
   const allChecked = selectable.length > 0 && selectable.every((f) => selected.has(f.id));
 
   function toggleAll() {
@@ -620,6 +626,8 @@ function DrivePageInner() {
             <tbody>
               {files.map((f) => {
                 const ingesting = f._status === "ingesting";
+                const empty = isEmptyFile(f);
+                const canIngest = f.ingestible && !empty;
                 return (
                   <tr key={f.id} className={selected.has(f.id) ? "fm-row--selected" : ""}>
                     <td>
@@ -628,7 +636,7 @@ function DrivePageInner() {
                         className="fm-checkbox"
                         checked={selected.has(f.id)}
                         onChange={() => toggleSelect(f.id)}
-                        disabled={!f.ingestible || ingesting}
+                        disabled={!canIngest || ingesting}
                       />
                     </td>
                     <td className="fm-filename" title={f.name}>
@@ -650,6 +658,8 @@ function DrivePageInner() {
                     <td>
                       {f.folder ? (
                         <span className="fm-meta">—</span>
+                      ) : empty ? (
+                        <span className="badge badge--idle">Empty</span>
                       ) : ingesting ? (
                         <span className="badge badge--loading">Ingesting…</span>
                       ) : f.ingested ? (
@@ -662,7 +672,7 @@ function DrivePageInner() {
                       {f._error && <span className="fm-error-tip" title={f._error}> ⚠</span>}
                     </td>
                     <td>
-                      {f.ingestible && (
+                      {canIngest && (
                         <button
                           className="btn btn--ghost btn--sm"
                           onClick={() => ingestIds([f.id])}

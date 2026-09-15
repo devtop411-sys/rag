@@ -12,7 +12,9 @@ services:
       VOYAGE_MODEL:      ${VOYAGE_MODEL:-voyage-3.5}
       QDRANT_URL:        ${QDRANT_URL}
       QDRANT_API_KEY:    ${QDRANT_API_KEY}
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-investment_memos}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-dev_investment_memos}
+      FIREFLIES_STATE_COLLECTION: ${FIREFLIES_STATE_COLLECTION:-fireflies_state_dev}
+      DRIVE_STATE_COLLECTION: ${DRIVE_STATE_COLLECTION:-google_drive_state_dev}
       API_KEY:           ${API_KEY}
       OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
       OPENAI_MODEL:      ${OPENAI_MODEL:-gpt-4o-mini}
@@ -59,7 +61,7 @@ services:
       VOYAGE_MODEL:      ${VOYAGE_MODEL:-voyage-3.5}
       QDRANT_URL:        ${QDRANT_URL}
       QDRANT_API_KEY:    ${QDRANT_API_KEY}
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-investment_memos}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-dev_investment_memos}
       OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
       OPENAI_MODEL:      ${OPENAI_MODEL:-gpt-4o-mini}
       OPENAI_BASE_URL:   ${OPENAI_BASE_URL:-}

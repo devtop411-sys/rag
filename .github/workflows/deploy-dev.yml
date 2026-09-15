@@ -18,6 +18,7 @@ jobs:
           VOYAGE_API_KEY:   ${{ secrets.VOYAGE_API_KEY }}
           QDRANT_URL:       ${{ secrets.QDRANT_URL }}
           QDRANT_API_KEY:   ${{ secrets.QDRANT_API_KEY }}
+          QDRANT_COLLECTION: ${{ secrets.DEV_QDRANT_COLLECTION }}
           API_KEY:          ${{ secrets.DEV_API_KEY }}
           SLACK_BOT_TOKEN:  ${{ secrets.SLACK_BOT_TOKEN }}
           DIFY_API_KEY:     ${{ secrets.DIFY_API_KEY }}
@@ -36,7 +37,7 @@ jobs:
           host:     ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key:      ${{ secrets.EC2_SSH_KEY }}
-          envs: VOYAGE_API_KEY,QDRANT_URL,QDRANT_API_KEY,API_KEY,SLACK_BOT_TOKEN,DIFY_API_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,MCP_GOOGLE_CLIENT_ID,MCP_GOOGLE_CLIENT_SECRET,VITE_GOOGLE_DRIVE_CLIENT_ID,OPENAI_API_KEY,S3_BUCKET,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,OAUTH_SIGNING_SECRET
+          envs: VOYAGE_API_KEY,QDRANT_URL,QDRANT_API_KEY,QDRANT_COLLECTION,API_KEY,SLACK_BOT_TOKEN,DIFY_API_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,MCP_GOOGLE_CLIENT_ID,MCP_GOOGLE_CLIENT_SECRET,VITE_GOOGLE_DRIVE_CLIENT_ID,OPENAI_API_KEY,S3_BUCKET,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,OAUTH_SIGNING_SECRET
           script: |
             set -e
 
@@ -58,7 +59,9 @@ jobs:
             echo "VOYAGE_MODEL=voyage-3.5"           >> .env
             echo "QDRANT_URL=$QDRANT_URL"            >> .env
             echo "QDRANT_API_KEY=$QDRANT_API_KEY"    >> .env
-            echo "QDRANT_COLLECTION=investment_memos_dev" >> .env
+            echo "QDRANT_COLLECTION=${QDRANT_COLLECTION:-dev_investment_memos}" >> .env
+            echo "FIREFLIES_STATE_COLLECTION=fireflies_state_dev" >> .env
+            echo "DRIVE_STATE_COLLECTION=google_drive_state_dev" >> .env
             echo "API_KEY=$API_KEY"                  >> .env
             echo "VITE_API_KEY=$API_KEY"             >> .env
             echo "SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN"  >> .env

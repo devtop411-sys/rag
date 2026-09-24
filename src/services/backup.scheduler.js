@@ -28,8 +28,10 @@ export function startBackupScheduler() {
     return;
   }
   console.log(
-    `[backup-scheduler] Scheduled every ${INTERVAL / 3_600_000}h — first backup in ${INTERVAL / 3_600_000}h`,
+    `[backup-scheduler] Running first backup now, then every ${INTERVAL / 3_600_000}h`,
   );
+  // Run immediately on startup, then repeat on interval
+  tick();
   timer = setInterval(tick, INTERVAL);
   // Don't keep the process alive just for backups
   timer.unref();

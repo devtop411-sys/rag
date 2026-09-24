@@ -3,6 +3,7 @@ import app from "./app.js";
 import { EMBEDDING_MODEL, EXPECTED_DENSE_SIZE, COLLECTION } from "./config/constants.js";
 import { startScheduler } from "./services/fireflies.sync.js";
 import { startScheduler as startDriveScheduler } from "./services/drive.sync.js";
+import { startBackupScheduler } from "./services/backup.scheduler.js";
 
 const PORT = process.env.PORT || 3001;
 
@@ -14,4 +15,5 @@ app.listen(PORT, () => {
 
   startScheduler();
   startDriveScheduler();
+  startBackupScheduler();
 });

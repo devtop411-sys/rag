@@ -4,11 +4,6 @@ import { COLLECTION }       from "../config/constants.js";
 
 const router = Router();
 
-/**
- * POST /backup
- * Trigger an on-demand Qdrant → S3 backup.
- * Body (optional): { "collection": "custom_name" }
- */
 router.post("/backup", async (req, res) => {
   const collection = req.body?.collection || COLLECTION;
   try {

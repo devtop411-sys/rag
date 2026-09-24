@@ -8,7 +8,7 @@ A minimal RAG pipeline: upload a PDF, index it into Qdrant with Voyage AI embedd
 
 ### 1. Configure environment
 
-Copy `.env` and fill in your API keys:
+Copy `.env.example` to `.env` and fill in your API keys:
 
 ```env
 PORT=3001

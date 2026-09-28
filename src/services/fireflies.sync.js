@@ -1,4 +1,4 @@
-import { getConnection, saveConnection, getApiKey } from "./fireflies.state.js";
+import { getConnection, saveConnection, getApiKey, autoConnect } from "./fireflies.state.js";
 import { listTranscripts } from "./fireflies.service.js";
 import { ingestMeeting, getMeetingIngestState } from "./fireflies.ingest.js";
 
@@ -241,8 +241,10 @@ async function tickScheduler() {
   }
 }
 
-export function startScheduler() {
+export async function startScheduler() {
   if (timer) return;
+
+  await autoConnect();
 
   const TICK_MS = 60 * 1000;
   nextRunAt = Date.now() + STARTUP_DELAY_MS;

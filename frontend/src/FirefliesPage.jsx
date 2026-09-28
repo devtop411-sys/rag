@@ -23,7 +23,6 @@ const DEFAULT_SETTINGS = {
 
 export default function FirefliesPage() {
   const [conn, setConn]           = useState(null);
-  const [apiKeyInput, setApiKey]  = useState("");
   const [settings, setSettings]   = useState(DEFAULT_SETTINGS);
 
   const [meetings, setMeetings]   = useState([]);
@@ -51,45 +50,6 @@ export default function FirefliesPage() {
       setConn(data);
     } catch (err) {
       setError(err.message);
-    }
-  }
-
-  async function handleConnect() {
-    if (!apiKeyInput.trim()) return;
-    setBusy("connect");
-    setError("");
-    try {
-      const res  = await fetch(`${API_BASE}/api/fireflies/connect`, {
-        method: "POST",
-        headers: jsonHeaders,
-        body: JSON.stringify({ apiKey: apiKeyInput.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Connection failed");
-      setApiKey("");
-      setConn(data);
-      setNotice("Connected to Fireflies.");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function handleDisconnect() {
-    if (!confirm("Disconnect Fireflies? Ingested meetings stay in the knowledge base.")) return;
-    setBusy("connect");
-    try {
-      const res  = await fetch(`${API_BASE}/api/fireflies/disconnect`, { method: "POST", headers: jsonHeaders });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to disconnect");
-      setConn(data);
-      setMeetings([]);
-      setSelected(new Set());
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy("");
     }
   }
 
@@ -253,27 +213,10 @@ export default function FirefliesPage() {
               <div>
                 <strong>Fireflies connector</strong>
                 <p className="fm-meta" style={{ margin: "4px 0 0" }}>
-                  Paste your Fireflies API key to connect. Find it in Fireflies →
-                  Settings → Developer Settings.
+                  Set the <code>FIREFLIES_API_KEY</code> environment variable to connect.
                 </p>
               </div>
-              <input
-                type="password"
-                className="fm-input"
-                placeholder="Fireflies API key"
-                value={apiKeyInput}
-                onChange={(e) => setApiKey(e.target.value)}
-                style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #ccc" }}
-              />
-              <div>
-                <button
-                  className="btn btn--primary"
-                  onClick={handleConnect}
-                  disabled={busy === "connect" || !apiKeyInput.trim()}
-                >
-                  {busy === "connect" ? "Connecting…" : "Connect"}
-                </button>
-              </div>
+              <span className="badge badge--idle">Not connected</span>
             </div>
           ) : (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", justifyContent: "space-between" }}>
@@ -289,14 +232,9 @@ export default function FirefliesPage() {
                   Last sync: {conn.last_synced_at ? new Date(conn.last_synced_at).toLocaleString() : "never"}
                 </span>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button className="btn btn--primary" onClick={handleSyncNow} disabled={busy === "sync"}>
-                  {busy === "sync" ? "Syncing…" : "Sync now"}
-                </button>
-                <button className="btn btn--ghost btn--sm" onClick={handleDisconnect} disabled={busy === "connect"}>
-                  Disconnect
-                </button>
-              </div>
+              <button className="btn btn--primary" onClick={handleSyncNow} disabled={busy === "sync"}>
+                {busy === "sync" ? "Syncing…" : "Sync now"}
+              </button>
             </div>
           )}
         </div>

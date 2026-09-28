@@ -1,4 +1,5 @@
 import { qdrant } from "./qdrant.service.js";
+import { testConnection } from "./fireflies.service.js";
 import {
   FIREFLIES_STATE_COLLECTION,
   FIREFLIES_API_KEY,
@@ -83,6 +84,31 @@ export async function saveConnection(patch) {
 }
 
 export async function getApiKey() {
+  if (FIREFLIES_API_KEY) return FIREFLIES_API_KEY;
   const conn = await getConnection();
-  return conn.api_key || FIREFLIES_API_KEY || "";
+  return conn.api_key || "";
+}
+
+export async function autoConnect() {
+  if (!FIREFLIES_API_KEY) return false;
+
+  const conn = await getConnection();
+  if (conn.status === "connected" && conn.api_key === FIREFLIES_API_KEY) {
+    return true;
+  }
+
+  try {
+    const account = await testConnection(FIREFLIES_API_KEY);
+    await saveConnection({
+      api_key: FIREFLIES_API_KEY,
+      status:  "connected",
+      account,
+      auto_sync: { enabled: true },
+    });
+    console.log(`[fireflies] Auto-connected via FIREFLIES_API_KEY (${account.email || account.name})`);
+    return true;
+  } catch (err) {
+    console.error(`[fireflies] Auto-connect failed: ${err.message}`);
+    return false;
+  }
 }

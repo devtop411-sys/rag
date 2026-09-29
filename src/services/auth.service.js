@@ -26,9 +26,24 @@ export async function verifyGoogleCredential(credential) {
     throw err;
   }
 
+  if (payload.email_verified !== "true" && payload.email_verified !== true) {
+    console.warn(`[auth/google] Rejected unverified email: ${payload.email}`);
+    const err = new Error("Email address is not verified");
+    err.status = 403;
+    throw err;
+  }
+
   const email = (payload.email ?? "").toLowerCase();
-  if (!email.endsWith(`@${ALLOWED_DOMAIN}`) && !ALLOWED_EMAILS.has(email)) {
-    const err = new Error(`Access restricted to @${ALLOWED_DOMAIN} accounts`);
+
+  const domainMatch = ALLOWED_DOMAIN && email.endsWith(`@${ALLOWED_DOMAIN}`);
+  const emailMatch = ALLOWED_EMAILS.has(email);
+
+  if (!domainMatch && !emailMatch) {
+    const reason = ALLOWED_DOMAIN
+      ? `Access restricted to @${ALLOWED_DOMAIN} accounts`
+      : "Access denied — your account is not in the allowed list";
+    console.warn(`[auth/google] Rejected: ${email} (not allowed)`);
+    const err = new Error(reason);
     err.status = 403;
     throw err;
   }

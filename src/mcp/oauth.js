@@ -538,7 +538,7 @@ function renderAuthorizePage(params) {
 <body>
   <div class="card">
     <h1>Connect to Collider RAG</h1>
-    <p>Sign in with your <strong>@${ALLOWED_DOMAIN}</strong> Google account to authorize this MCP connection.</p>
+    <p>Sign in with your ${ALLOWED_DOMAIN ? `<strong>@${ALLOWED_DOMAIN}</strong> ` : ""}Google account to authorize this MCP connection.</p>
     <div class="btnwrap">
       <div id="g_id_onload"
            data-client_id="${clientIdAttr}"

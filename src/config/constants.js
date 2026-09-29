@@ -139,5 +139,11 @@ const googlePair = googleOAuthPair();
 export const GOOGLE_CLIENT_ID = googlePair.id;
 export const GOOGLE_CLIENT_SECRET = googlePair.secret;
 
-export const ALLOWED_DOMAIN  = "collider.vc";
-export const ALLOWED_EMAILS  = new Set(["devtop411@gmail.com"]);
+export const ALLOWED_DOMAIN = (process.env.ALLOWED_DOMAIN || "").trim().toLowerCase();
+
+export const ALLOWED_EMAILS = new Set(
+  (process.env.ALLOWED_EMAILS || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean),
+);

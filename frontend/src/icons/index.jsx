@@ -50,6 +50,15 @@ export function DriveIcon() {
   );
 }
 
+export function ShieldIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2s8 3 8 10-8 10-8 10S4 19 4 12 12 2 12 2z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  );
+}
+
 export function LogoutIcon() {
   return (
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

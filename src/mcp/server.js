@@ -18,6 +18,7 @@ import {
   COLLECTION,
   EMBEDDING_MODEL,
   EXPECTED_DENSE_SIZE,
+  ADMIN_EMAILS,
 } from "../config/constants.js";
 
 // ---------------------------------------------------------------------------
@@ -45,17 +46,29 @@ function formatResults(results) {
 // Returns a fully-configured McpServer with all tools registered. A fresh
 // instance is created per stdio process and per HTTP request (stateless mode).
 // ---------------------------------------------------------------------------
-export function createMcpServer() {
+function mcpAccessFilter(user) {
+  if (!user || ADMIN_EMAILS.has(user.email)) return [];
+  return [
+    {
+      should: [
+        { must_not: [{ key: "source", match: { value: "fireflies" } }] },
+        { must: [{ key: "allowed_emails", match: { value: user.email } }] },
+      ],
+    },
+  ];
+}
+
+export function createMcpServer(user) {
   const server = new McpServer({
     name: "rag-knowledge-base",
     version: "1.0.0",
   });
 
-  registerTools(server);
+  registerTools(server, user);
   return server;
 }
 
-function registerTools(server) {
+function registerTools(server, user) {
 // ---------------------------------------------------------------------------
 // Tool: hello  (connectivity check for Claude Custom Connectors)
 // ---------------------------------------------------------------------------
@@ -97,10 +110,12 @@ server.tool(
 
       const [embedding] = await embedTexts([searchText]);
 
+      const accessConditions = mcpAccessFilter(user);
       const hits = await qdrant.search(COLLECTION, {
         vector: embedding,
         limit: 5,
         with_payload: ["text", "source", "chunk_index", "document_id"],
+        filter: accessConditions.length ? { must: accessConditions } : undefined,
       });
 
       if (!hits.length) {
@@ -160,6 +175,7 @@ server.tool(
         : query;
 
       const [embedding] = await embedTexts([searchText]);
+      const accessConditions = mcpAccessFilter(user);
 
       let results = [];
 
@@ -168,7 +184,10 @@ server.tool(
           vector: embedding,
           limit,
           with_payload: true,
-          filter: { must: [{ key: "meta_query", match: { any: tags } }] },
+          filter: { must: [
+            { key: "meta_query", match: { any: tags } },
+            ...accessConditions,
+          ] },
         });
         results = filtered;
       }
@@ -178,6 +197,7 @@ server.tool(
           vector: embedding,
           limit,
           with_payload: true,
+          filter: accessConditions.length ? { must: accessConditions } : undefined,
         });
         const seen = new Set(results.map((r) => r.id));
         for (const hit of fallback) {

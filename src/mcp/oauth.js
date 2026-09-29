@@ -2,7 +2,6 @@ import { Router } from "express";
 import express from "express";
 import {
   randomUUID,
-  randomBytes,
   createHash,
   timingSafeEqual,
 } from "node:crypto";
@@ -10,28 +9,18 @@ import { SignJWT, jwtVerify } from "jose";
 
 import { verifyGoogleCredential } from "../services/auth.service.js";
 import { ALLOWED_DOMAIN } from "../config/constants.js";
+import { SIGNING_KEY } from "../config/jwt.js";
 
 const ACCESS_TTL = Number(process.env.OAUTH_ACCESS_TTL || 3600); // seconds
 const REFRESH_TTL = Number(process.env.OAUTH_REFRESH_TTL || 60 * 60 * 24 * 30);
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || process.env.MCP_GOOGLE_CLIENT_ID || "";
 
-let signingSecret = process.env.OAUTH_SIGNING_SECRET;
-const EPHEMERAL_KEY = !signingSecret;
-if (EPHEMERAL_KEY) {
-  signingSecret = randomBytes(48).toString("base64url");
-  console.warn(
-    "[MCP OAuth] OAUTH_SIGNING_SECRET is not set — using an ephemeral signing key. " +
-      "Tokens will be invalidated on restart and won't work across multiple instances. " +
-      "Set OAUTH_SIGNING_SECRET in production.",
-  );
-}
 if (!GOOGLE_CLIENT_ID) {
   console.warn(
     "[MCP OAuth] GOOGLE_CLIENT_ID is not set — the sign-in page cannot render the " +
       "Google button. Set GOOGLE_CLIENT_ID to enable login.",
   );
 }
-const SIGNING_KEY = new TextEncoder().encode(signingSecret);
 
 export function getBaseUrl(req) {
   const configured = (process.env.PUBLIC_BASE_URL || "").trim();

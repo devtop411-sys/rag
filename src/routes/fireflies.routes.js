@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireApiKey } from "../middleware/requireApiKey.js";
+import { optionalAuth } from "../middleware/requireAuth.js";
 import {
   status,
   connect,
@@ -19,8 +20,8 @@ router.get("/api/fireflies/status",       requireApiKey, status);
 router.post("/api/fireflies/connect",     requireApiKey, connect);
 router.post("/api/fireflies/disconnect",  requireApiKey, disconnect);
 router.post("/api/fireflies/test",        requireApiKey, test);
-router.get("/api/fireflies/meetings",     requireApiKey, meetings);
-router.post("/api/fireflies/ingest",      requireApiKey, ingest);
+router.get("/api/fireflies/meetings",     requireApiKey, optionalAuth, meetings);
+router.post("/api/fireflies/ingest",      requireApiKey, optionalAuth, ingest);
 router.get("/api/fireflies/settings",     requireApiKey, getSettings);
 router.put("/api/fireflies/settings",     requireApiKey, updateSettings);
 router.post("/api/fireflies/sync",        requireApiKey, sync);

@@ -1,7 +1,5 @@
 import { useState, useEffect } from "react";
-import { API_BASE, API_KEY } from "./apiBase.js";
-const authHeaders = API_KEY ? { "x-api-key": API_KEY } : {};
-const jsonHeaders = { "Content-Type": "application/json", ...authHeaders };
+import { API_BASE, authHeaders as getAuthHeaders, jsonHeaders as getJsonHeaders } from "./apiBase.js";
 
 function formatDuration(minutes) {
   const mins = Math.round(minutes || 0);
@@ -44,7 +42,7 @@ export default function FirefliesPage() {
 
   async function loadStatus() {
     try {
-      const res  = await fetch(`${API_BASE}/api/fireflies/status`, { headers: authHeaders });
+      const res  = await fetch(`${API_BASE}/api/fireflies/status`, { headers: getAuthHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load status");
       setConn(data);
@@ -63,7 +61,7 @@ export default function FirefliesPage() {
         limit: String(PAGE_SIZE),
       });
       if (force) params.set("refresh", "1");
-      const res  = await fetch(`${API_BASE}/api/fireflies/meetings?${params}`, { headers: authHeaders });
+      const res  = await fetch(`${API_BASE}/api/fireflies/meetings?${params}`, { headers: getAuthHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load meetings");
       setMeetings(data.meetings ?? []);
@@ -90,7 +88,7 @@ export default function FirefliesPage() {
     try {
       const res  = await fetch(`${API_BASE}/api/fireflies/ingest`, {
         method: "POST",
-        headers: jsonHeaders,
+        headers: getJsonHeaders(),
         body: JSON.stringify({ ids }),
       });
       const data = await res.json();
@@ -114,7 +112,7 @@ export default function FirefliesPage() {
     setError("");
     setNotice("");
     try {
-      const res  = await fetch(`${API_BASE}/api/fireflies/sync`, { method: "POST", headers: jsonHeaders });
+      const res  = await fetch(`${API_BASE}/api/fireflies/sync`, { method: "POST", headers: getJsonHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Sync failed");
 
@@ -124,7 +122,7 @@ export default function FirefliesPage() {
       for (;;) {
         await new Promise((r) => setTimeout(r, 3000));
 
-        const s = await fetch(`${API_BASE}/api/fireflies/sync`, { headers: jsonHeaders });
+        const s = await fetch(`${API_BASE}/api/fireflies/sync`, { headers: getAuthHeaders() });
         const { sync } = await s.json();
         if (!sync) break;
 
@@ -162,7 +160,7 @@ export default function FirefliesPage() {
     try {
       const res  = await fetch(`${API_BASE}/api/fireflies/settings`, {
         method: "PUT",
-        headers: jsonHeaders,
+        headers: getJsonHeaders(),
         body: JSON.stringify({ auto_sync: settings }),
       });
       const data = await res.json();

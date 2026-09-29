@@ -1,11 +1,6 @@
 import { createContext, useCallback, useContext, useState } from "react";
 import { useGoogleLogin } from "@react-oauth/google";
-import { API_BASE, API_KEY } from "./apiBase.js";
-
-const jsonHeaders = {
-  "Content-Type": "application/json",
-  ...(API_KEY ? { "x-api-key": API_KEY } : {}),
-};
+import { API_BASE, jsonHeaders as getJsonHeaders } from "./apiBase.js";
 
 export const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
@@ -40,7 +35,7 @@ export function DriveAuthProvider({ children }) {
     try {
       res = await fetch(`${API_BASE}/api/drive/connect`, {
         method:  "POST",
-        headers: jsonHeaders,
+        headers: getJsonHeaders(),
         body:    JSON.stringify({ code, redirect_uri: "postmessage" }),
       });
     } catch {
@@ -96,7 +91,7 @@ export function DriveAuthProvider({ children }) {
 
   const disconnect = useCallback(async () => {
     const res  = await fetch(`${API_BASE}/api/drive/disconnect`, {
-      method: "POST", headers: jsonHeaders,
+      method: "POST", headers: getJsonHeaders(),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? "Failed to disconnect");

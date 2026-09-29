@@ -1,13 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { useDriveAuth } from "./driveAuth.jsx";
-import { API_BASE, API_KEY } from "./apiBase.js";
+import { API_BASE, authHeaders as getAuthHeaders, jsonHeaders as getJsonHeaders } from "./apiBase.js";
 const DRIVE_CLIENT_ID =
   import.meta.env.VITE_GOOGLE_CLIENT_ID ||
   import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID ||
   "";
-
-const authHeaders = API_KEY ? { "x-api-key": API_KEY } : {};
-const jsonHeaders = { "Content-Type": "application/json", ...authHeaders };
 
 const ROOTS = [
   { id: "root",         name: "My Drive" },
@@ -85,7 +82,7 @@ function DrivePageInner() {
 
   const loadStatus = useCallback(async () => {
     try {
-      const res  = await fetch(`${API_BASE}/api/drive/status`, { headers: authHeaders });
+      const res  = await fetch(`${API_BASE}/api/drive/status`, { headers: getAuthHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load Drive status");
       setConn(data);
@@ -138,7 +135,7 @@ function DrivePageInner() {
       if (nextPage) params.set("pageToken", nextPage);
 
       const res  = await fetch(`${API_BASE}/api/drive/files?${params}`, {
-        headers: authHeaders,
+        headers: getAuthHeaders(),
       });
       const data = await res.json();
       if (res.status === 401) {
@@ -218,7 +215,7 @@ function DrivePageInner() {
     try {
       const res  = await fetch(`${API_BASE}/api/drive/settings`, {
         method:  "PUT",
-        headers: jsonHeaders,
+        headers: getJsonHeaders(),
         body:    JSON.stringify({ auto_sync: settings, ...overrides }),
       });
       const data = await res.json();
@@ -253,7 +250,7 @@ function DrivePageInner() {
     setNotice("");
     try {
       const res  = await fetch(`${API_BASE}/api/drive/sync`, {
-        method: "POST", headers: jsonHeaders,
+        method: "POST", headers: getJsonHeaders(),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -270,7 +267,7 @@ function DrivePageInner() {
       for (;;) {
         await new Promise((r) => setTimeout(r, 3000));
 
-        const s = await fetch(`${API_BASE}/api/drive/sync`, { headers: jsonHeaders });
+        const s = await fetch(`${API_BASE}/api/drive/sync`, { headers: getAuthHeaders() });
         const { sync } = await s.json();
         if (!sync) break;
 
@@ -317,7 +314,7 @@ function DrivePageInner() {
     try {
       const res  = await fetch(`${API_BASE}/api/drive/ingest`, {
         method:  "POST",
-        headers: jsonHeaders,
+        headers: getJsonHeaders(),
         body:    JSON.stringify({ ids }),
       });
       const data = await res.json();

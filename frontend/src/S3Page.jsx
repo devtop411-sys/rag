@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { API_BASE, API_KEY } from "./apiBase.js";
-const authHeaders = API_KEY ? { "x-api-key": API_KEY } : {};
+import { API_BASE, authHeaders as getAuthHeaders, jsonHeaders as getJsonHeaders } from "./apiBase.js";
 
 const STATUS_LABEL = {
   not_ingested: { label: "Not ingested", cls: "badge--idle" },
@@ -32,7 +31,7 @@ export default function S3Page() {
     setLoading(true);
     setError("");
     try {
-      const res  = await fetch(`${API_BASE}/api/s3/files`, { headers: authHeaders });
+      const res  = await fetch(`${API_BASE}/api/s3/files`, { headers: getAuthHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load files");
       setFiles(
@@ -68,7 +67,7 @@ export default function S3Page() {
 
       const res  = await fetch(`${API_BASE}/api/s3/upload`, {
         method:  "POST",
-        headers: { ...authHeaders },
+        headers: { ...getAuthHeaders() },
         body:    form,
       });
       const data = await res.json();
@@ -109,7 +108,7 @@ export default function S3Page() {
     try {
       const res  = await fetch(`${API_BASE}/api/ingest/s3`, {
         method:  "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders },
+        headers: getJsonHeaders(),
         body:    JSON.stringify({ files: keys.map((key) => ({ key })) }),
       });
       const data = await res.json();
@@ -144,7 +143,7 @@ export default function S3Page() {
     try {
       await fetch(`${API_BASE}/api/s3/file`, {
         method:  "DELETE",
-        headers: { "Content-Type": "application/json", ...authHeaders },
+        headers: getJsonHeaders(),
         body:    JSON.stringify({ key }),
       });
     } catch { /* already removed from UI */ }

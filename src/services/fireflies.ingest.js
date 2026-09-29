@@ -101,6 +101,15 @@ export async function ingestMeeting(apiKey, meetingId) {
   if (meta.organizer) docTags.push(`organizer:${meta.organizer}`);
   if (meta.date_string) docTags.push(`date:${meta.date_string.slice(0, 10)}`);
 
+  const allowedEmails = [
+    ...new Set(
+      [meta.organizer, ...meta.participants]
+        .filter(Boolean)
+        .map((e) => String(e).trim().toLowerCase())
+        .filter((e) => e.includes("@")),
+    ),
+  ];
+
   const points = chunks.map((c, i) => ({
     id:     uuidv4(),
     vector: embeddings[i],
@@ -112,6 +121,7 @@ export async function ingestMeeting(apiKey, meetingId) {
       meeting_date:    meta.date_string,
       participants:    meta.participants,
       organizer:       meta.organizer,
+      allowed_emails:  allowedEmails,
       meeting_url:     meta.meeting_url,
       speaker:         c.speakers.join(", "),
       start_time:      c.start_time,

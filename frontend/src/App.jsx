@@ -7,6 +7,7 @@ import S3Page     from "./S3Page.jsx";
 import FirefliesPage from "./FirefliesPage.jsx";
 import DrivePage  from "./DrivePage.jsx";
 import McpPlaygroundPage from "./McpPlaygroundPage.jsx";
+import AdminPage  from "./AdminPage.jsx";
 import { DriveAuthProvider } from "./driveAuth.jsx";
 import {
   BurgerIcon,
@@ -16,17 +17,19 @@ import {
   DriveIcon,
   PuzzleIcon,
   LogoutIcon,
+  ShieldIcon,
 } from "./icons/index.jsx";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
 
-const NAV_ITEMS = [
+const BASE_NAV = [
   { to: "/files",      label: "File Manager",   icon: FolderIcon },
   { to: "/upload",     label: "Quick Upload",   icon: UploadIcon },
   { to: "/drive",      label: "Google Drive",   icon: DriveIcon },
   { to: "/fireflies",  label: "Fireflies",      icon: SparkIcon },
   { to: "/playground", label: "MCP Playground", icon: PuzzleIcon },
 ];
+const ADMIN_NAV = { to: "/admin", label: "Admin", icon: ShieldIcon };
 
 function getStoredUser() {
   try { return JSON.parse(localStorage.getItem("collider_user") ?? "null"); }
@@ -44,6 +47,9 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("collider_sidebar_collapsed", collapsed ? "1" : "0");
   }, [collapsed]);
+
+  const isAdmin = user?.role === "admin";
+  const NAV_ITEMS = isAdmin ? [...BASE_NAV, ADMIN_NAV] : BASE_NAV;
 
   useEffect(() => { setMobileOpen(false); }, [location.pathname]);
 
@@ -132,6 +138,7 @@ export default function App() {
               <Route path="/drive" element={<DrivePage />} />
               <Route path="/fireflies" element={<FirefliesPage />} />
               <Route path="/playground" element={<McpPlaygroundPage />} />
+              {isAdmin && <Route path="/admin" element={<AdminPage />} />}
               <Route path="/mcp-oauth-callback" element={<McpPlaygroundPage />} />
               <Route path="/callback" element={<McpPlaygroundPage />} />
               <Route path="*" element={<Navigate to="/files" replace />} />

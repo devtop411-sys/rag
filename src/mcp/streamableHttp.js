@@ -21,7 +21,7 @@ import { mcpAuthGuard } from "./oauth.js";
 // events are logged. Never log auth tokens, AWS/Qdrant credentials, or env.
 // ---------------------------------------------------------------------------
 
-const transports = new Map(); // sessionId → StreamableHTTPServerTransport
+const transports = new Map(); // sessionId → { transport, user }
 
 export const mcpRouter = Router();
 
@@ -72,16 +72,15 @@ mcpRouter.post("/mcp", async (req, res) => {
     let transport;
 
     if (sessionId && transports.has(sessionId)) {
-      // Existing session — reuse its transport.
-      transport = transports.get(sessionId);
+      transport = transports.get(sessionId).transport;
     } else if (!sessionId && isInitializeRequest(req.body)) {
-      // New session — spin up a fresh server + transport pair.
+      const mcpUser = req.mcpUser || null;
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         enableJsonResponse: true,
         onsessioninitialized: (sid) => {
-          transports.set(sid, transport);
-          console.log(`[MCP] session initialized: ${sid}`);
+          transports.set(sid, { transport, user: mcpUser });
+          console.log(`[MCP] session initialized: ${sid} (user: ${mcpUser?.email ?? "anonymous"})`);
         },
       });
 
@@ -93,7 +92,7 @@ mcpRouter.post("/mcp", async (req, res) => {
         }
       };
 
-      const server = createMcpServer();
+      const server = createMcpServer(mcpUser);
       await server.connect(transport);
       console.log("[MCP] initialize request — new server connected");
     } else {
@@ -131,7 +130,7 @@ async function handleSessionRequest(req, res) {
   }
 
   try {
-    await transports.get(sessionId).handleRequest(req, res);
+    await transports.get(sessionId).transport.handleRequest(req, res);
   } catch (err) {
     console.error(`[MCP] ${req.method} /mcp error:`, err?.message ?? err);
     if (!res.headersSent) {

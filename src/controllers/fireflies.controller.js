@@ -113,8 +113,18 @@ export async function meetings(req, res) {
     const hasMore = list.length === limit;
 
     let filtered = list;
+
+    if (req.user && req.user.role !== "admin") {
+      const userEmail = req.user.email;
+      filtered = filtered.filter(
+        (m) =>
+          (m.organizer && m.organizer.toLowerCase() === userEmail) ||
+          m.participants.some((p) => String(p).toLowerCase() === userEmail),
+      );
+    }
+
     if (search) {
-      filtered = list.filter((m) => m.title.toLowerCase().includes(search));
+      filtered = filtered.filter((m) => m.title.toLowerCase().includes(search));
     }
 
     const withState = await Promise.all(

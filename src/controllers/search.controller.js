@@ -9,7 +9,7 @@ import { qdrant } from "../services/qdrant.service.js";
 import { generateSearchQueryMetadata } from "../services/document.service.js";
 import { buildSearchEmbeddingText } from "../utils/text.utils.js";
 
-const PAYLOAD_FIELDS = ["text", "source", "chunk_index", "meta_query", "author", "document_date"];
+const PAYLOAD_FIELDS = ["text", "source", "chunk_index", "meta_query", "author", "document_date", "allowed_emails"];
 
 // ---------------------------------------------------------------------------
 // POST /search — meta_query-aware semantic search
@@ -23,12 +23,27 @@ const PAYLOAD_FIELDS = ["text", "source", "chunk_index", "meta_query", "author",
 //
 // Body:  { query, tags?, limit?, min_results? }
 // ---------------------------------------------------------------------------
+function qdrantAccessFilter(user) {
+  if (!user || user.role === "admin") return [];
+  return [
+    {
+      should: [
+        {
+          must_not: [{ key: "source", match: { value: "fireflies" } }],
+        },
+        {
+          must: [{ key: "allowed_emails", match: { value: user.email } }],
+        },
+      ],
+    },
+  ];
+}
+
 export async function search(req, res) {
   try {
     const { query, tags, limit = 5, min_results = 2 } = req.body;
     if (!query) return res.status(400).json({ error: "Missing query" });
 
-    // Expand the query with synonyms and a clearer rephrasing for better retrieval.
     const queryMeta = await generateSearchQueryMetadata(query);
     const searchText = queryMeta
       ? buildSearchEmbeddingText(query, queryMeta)
@@ -38,6 +53,8 @@ export async function search(req, res) {
     }
 
     const [embedding] = await embedTexts([searchText]);
+
+    const accessConditions = qdrantAccessFilter(req.user);
 
     let results  = [];
     let usedTags = false;
@@ -52,7 +69,10 @@ export async function search(req, res) {
         limit,
         with_payload: PAYLOAD_FIELDS,
         filter: {
-          must: [{ key: "meta_query", match: { any: validTags } }],
+          must: [
+            { key: "meta_query", match: { any: validTags } },
+            ...accessConditions,
+          ],
         },
       });
       results  = filtered;
@@ -65,6 +85,7 @@ export async function search(req, res) {
         vector:       embedding,
         limit,
         with_payload: PAYLOAD_FIELDS,
+        filter: accessConditions.length ? { must: accessConditions } : undefined,
       });
       const seen = new Set(results.map((r) => r.id));
       for (const hit of fallback) {

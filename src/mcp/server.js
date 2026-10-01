@@ -322,28 +322,34 @@ server.tool(
 // ---------------------------------------------------------------------------
 server.tool(
   "list_documents",
-  "List all documents currently stored in the knowledge base, grouped by document ID.",
+  "List all documents currently stored in the knowledge base, grouped by document ID. Fireflies meeting transcripts are filtered to only show meetings the authenticated user participated in.",
   {},
   async () => {
     try {
       const seen = new Map();
       let offset = null;
+      const isAdmin = user && ADMIN_EMAILS.has(user.email);
 
-      // Scroll all points to collect unique documents.
       do {
         const page = await qdrant.scroll(COLLECTION, {
           limit: 250,
           offset: offset ?? undefined,
-          with_payload: ["document_id", "source", "chunk_index", "created_at"],
+          with_payload: ["document_id", "source", "chunk_index", "created_at", "allowed_emails", "meeting_title"],
           with_vector: false,
         });
 
         for (const point of page.points) {
-          const { document_id, source, chunk_index, created_at } =
+          const { document_id, source, chunk_index, created_at, allowed_emails, meeting_title } =
             point.payload ?? {};
           if (!document_id) continue;
+
+          if (source === "fireflies" && user && !isAdmin) {
+            const emails = Array.isArray(allowed_emails) ? allowed_emails : [];
+            if (!emails.includes(user.email)) continue;
+          }
+
           if (!seen.has(document_id)) {
-            seen.set(document_id, { document_id, source, chunks: 0, created_at });
+            seen.set(document_id, { document_id, source, chunks: 0, created_at, meeting_title });
           }
           seen.get(document_id).chunks += 1;
         }
@@ -358,8 +364,12 @@ server.tool(
       const lines = [...seen.values()]
         .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""))
         .map(
-          (d, i) =>
-            `${i + 1}. ${d.source ?? "(unknown)"}\n   id: ${d.document_id}  chunks: ${d.chunks}  ingested: ${d.created_at?.slice(0, 10) ?? "?"}`,
+          (d, i) => {
+            const name = d.source === "fireflies" && d.meeting_title
+              ? `${d.meeting_title} (fireflies)`
+              : (d.source ?? "(unknown)");
+            return `${i + 1}. ${name}\n   id: ${d.document_id}  chunks: ${d.chunks}  ingested: ${d.created_at?.slice(0, 10) ?? "?"}`;
+          },
         );
 
       return {
@@ -369,6 +379,96 @@ server.tool(
             text: `${seen.size} document(s) in the knowledge base:\n\n${lines.join("\n\n")}`,
           },
         ],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Error: ${err.message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool: list_my_meetings
+// ---------------------------------------------------------------------------
+server.tool(
+  "list_my_meetings",
+  "List Fireflies meeting transcripts that the authenticated user participated in. Returns meeting titles, dates, participants, and document IDs.",
+  {},
+  async () => {
+    try {
+      if (!user) {
+        return {
+          content: [{ type: "text", text: "No authenticated user — cannot determine meeting ownership." }],
+          isError: true,
+        };
+      }
+
+      const isAdmin = ADMIN_EMAILS.has(user.email);
+      const meetings = new Map();
+      let offset = null;
+
+      do {
+        const scrollFilter = isAdmin
+          ? { must: [{ key: "source", match: { value: "fireflies" } }] }
+          : { must: [
+              { key: "source", match: { value: "fireflies" } },
+              { key: "allowed_emails", match: { value: user.email } },
+            ] };
+
+        const page = await qdrant.scroll(COLLECTION, {
+          limit: 250,
+          offset: offset ?? undefined,
+          with_payload: ["document_id", "meeting_id", "meeting_title", "meeting_date", "participants", "organizer", "chunk_index"],
+          with_vector: false,
+          filter: scrollFilter,
+        });
+
+        for (const point of page.points) {
+          const p = point.payload ?? {};
+          const key = p.meeting_id || p.document_id;
+          if (!key) continue;
+
+          if (!meetings.has(key)) {
+            meetings.set(key, {
+              meeting_id:   p.meeting_id,
+              document_id:  p.document_id,
+              title:        p.meeting_title || "Untitled",
+              date:         p.meeting_date || null,
+              organizer:    p.organizer || null,
+              participants: p.participants || [],
+              chunks:       0,
+            });
+          }
+          meetings.get(key).chunks += 1;
+        }
+
+        offset = page.next_page_offset ?? null;
+      } while (offset !== null);
+
+      if (!meetings.size) {
+        return { content: [{ type: "text", text: `No Fireflies meetings found for ${user.email}.` }] };
+      }
+
+      const sorted = [...meetings.values()].sort((a, b) =>
+        (b.date ?? "").localeCompare(a.date ?? ""),
+      );
+
+      const lines = sorted.map((m, i) => {
+        const parts = [`${i + 1}. ${m.title}`];
+        if (m.date) parts.push(`   date: ${m.date.slice(0, 10)}`);
+        if (m.organizer) parts.push(`   organizer: ${m.organizer}`);
+        if (m.participants.length) parts.push(`   participants: ${m.participants.join(", ")}`);
+        parts.push(`   document_id: ${m.document_id}  chunks: ${m.chunks}`);
+        return parts.join("\n");
+      });
+
+      return {
+        content: [{
+          type: "text",
+          text: `${sorted.length} meeting(s) for ${user.email}:\n\n${lines.join("\n\n")}`,
+        }],
       };
     } catch (err) {
       return {
